@@ -1,0 +1,41 @@
+{
+  "name": "UARTScope Pro",
+  "short_name": "UARTScope",
+  "description": "Open-source embedded telemetry and debugging platform — the Wireshark of microcontrollers",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#010102",
+  "theme_color": "#5e6ad2",
+  "orientation": "any",
+  "categories": ["developer-tools", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Devices",
+      "short_name": "Devices",
+      "url": "/?view=devices",
+      "description": "Manage connected devices"
+    },
+    {
+      "name": "Terminal",
+      "short_name": "Terminal",
+      "url": "/?view=terminal",
+      "description": "View serial terminal output"
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import AlertPanel from './components/AlertPanel'
 import SessionsPanel from './components/SessionsPanel'
 import SessionDetail from './components/SessionDetail'
 import ProtocolDecoder from './components/ProtocolDecoder'
+import InstallPrompt from './components/InstallPrompt'
 import './styles/app.css'
 
 type View = 'devices' | 'terminal' | 'charts' | 'alerts' | 'sessions' | 'decoder'
@@ -225,6 +226,7 @@ export default function App() {
           )}
         </div>
       </main>
+      <InstallPrompt />
     </div>
   )
 }
