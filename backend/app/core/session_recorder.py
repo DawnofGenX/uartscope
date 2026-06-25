@@ -108,10 +108,50 @@ class SessionRecorder:
                 "device_id": session["device_id"],
                 "started_at": session["started_at"],
                 "ended_at": session.get("ended_at"),
+                "status": "recording" if self._active_sessions.get(session_id) else "completed",
                 "packet_count": len(session["packets"]),
                 "metric_count": len(session["metrics"]),
+                "event_count": len(session["events"]),
             }
+        # Check disk
+        if os.path.exists(settings.sessions_dir):
+            filepath = os.path.join(settings.sessions_dir, f"{session_id}.json")
+            if os.path.exists(filepath):
+                try:
+                    data = json.load(open(filepath))
+                    return {
+                        "id": data["id"],
+                        "name": data.get("name", f"Session {session_id[:8]}"),
+                        "device_id": data.get("device_id"),
+                        "started_at": data.get("started_at"),
+                        "ended_at": data.get("ended_at"),
+                        "status": "completed",
+                        "packet_count": len(data.get("packets", [])),
+                        "metric_count": len(data.get("metrics", [])),
+                        "event_count": len(data.get("events", [])),
+                    }
+                except Exception:
+                    pass
         return None
+
+    def rename_session(self, session_id: str, name: str) -> bool:
+        """Rename a session."""
+        session = self._sessions.get(session_id)
+        if session:
+            session["name"] = name
+            return True
+        # Check disk
+        if os.path.exists(settings.sessions_dir):
+            filepath = os.path.join(settings.sessions_dir, f"{session_id}.json")
+            if os.path.exists(filepath):
+                try:
+                    data = json.load(open(filepath))
+                    data["name"] = name
+                    json.dump(data, open(filepath, "w"), indent=2, default=str)
+                    return True
+                except Exception:
+                    pass
+        return False
 
     def list_sessions(self) -> List[Dict[str, Any]]:
         """List all sessions."""
@@ -123,7 +163,10 @@ class SessionRecorder:
                 "device_id": session["device_id"],
                 "started_at": session["started_at"],
                 "ended_at": session.get("ended_at"),
+                "status": "recording" if self._active_sessions.get(sid) else "completed",
                 "packet_count": len(session["packets"]),
+                "metric_count": len(session["metrics"]),
+                "event_count": len(session["events"]),
             })
         # Also scan disk
         if os.path.exists(settings.sessions_dir):
@@ -139,7 +182,10 @@ class SessionRecorder:
                             "device_id": data.get("device_id"),
                             "started_at": data.get("started_at"),
                             "ended_at": data.get("ended_at"),
+                            "status": "completed",
                             "packet_count": len(data.get("packets", [])),
+                            "metric_count": len(data.get("metrics", [])),
+                            "event_count": len(data.get("events", [])),
                         })
                     except Exception:
                         pass

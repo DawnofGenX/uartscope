@@ -3,9 +3,11 @@ import DevicePanel from './components/DevicePanel'
 import TerminalView from './components/TerminalView'
 import LiveChart from './components/LiveChart'
 import AlertPanel from './components/AlertPanel'
+import SessionsPanel from './components/SessionsPanel'
+import SessionDetail from './components/SessionDetail'
 import './styles/app.css'
 
-type View = 'devices' | 'terminal' | 'charts' | 'alerts'
+type View = 'devices' | 'terminal' | 'charts' | 'alerts' | 'sessions'
 
 interface Stats {
   total_devices: number
@@ -35,6 +37,7 @@ function formatUptime(seconds: number): string {
 export default function App() {
   const [view, setView] = useState<View>('devices')
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats>({
     total_devices: 0,
     connected_devices: 0,
@@ -54,7 +57,68 @@ export default function App() {
     { id: 'terminal', label: 'Terminal', icon: '▸' },
     { id: 'charts', label: 'Charts', icon: '◇' },
     { id: 'alerts', label: 'Alerts', icon: '◉' },
+    { id: 'sessions', label: 'Sessions', icon: '⟳' },
   ]
+
+  // Session detail view is a sub-view
+  if (view === 'sessions' && selectedSessionId) {
+    return (
+      <div className="app">
+        <aside className="sidebar">
+          <div className="sidebar-header">
+            <div className="logo">
+              <span className="logo-icon">◈</span>
+              <span className="logo-text">UARTScope</span>
+            </div>
+          </div>
+          <nav className="sidebar-nav">
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                className={`nav-item ${view === item.id ? 'active' : ''}`}
+                onClick={() => {
+                  if (item.id === 'sessions') {
+                    setSelectedSessionId(null)
+                  } else {
+                    setView(item.id)
+                  }
+                }}
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="sidebar-footer">
+            <div className="stats-grid">
+              <div className="stat-item">
+                <span className="stat-value">{stats.connected_devices}/{stats.total_devices}</span>
+                <span className="stat-label">Devices</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-value">{formatBytes(stats.total_bytes)}</span>
+                <span className="stat-label">Data</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-value">{stats.ws_clients}</span>
+                <span className="stat-label">Clients</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-value">{formatUptime(stats.uptime_seconds)}</span>
+                <span className="stat-label">Uptime</span>
+              </div>
+            </div>
+          </div>
+        </aside>
+        <main className="main-content">
+          <SessionDetail
+            sessionId={selectedSessionId}
+            onBack={() => setSelectedSessionId(null)}
+          />
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div className="app">
@@ -76,9 +140,6 @@ export default function App() {
             >
               <span className="nav-icon">{item.icon}</span>
               <span className="nav-label">{item.label}</span>
-              {item.id === 'alerts' && (
-                <span className="nav-badge">3</span>
-              )}
             </button>
           ))}
         </nav>
@@ -118,6 +179,7 @@ export default function App() {
               {view === 'terminal' && (selectedDeviceId ? `Device ${selectedDeviceId.slice(0, 8)}` : 'Select a device')}
               {view === 'charts' && 'Real-time telemetry'}
               {view === 'alerts' && 'Rule-based monitoring'}
+              {view === 'sessions' && 'Recording & replay'}
             </span>
           </div>
           <div className="top-bar-right">
@@ -149,6 +211,11 @@ export default function App() {
           )}
           {view === 'alerts' && (
             <AlertPanel />
+          )}
+          {view === 'sessions' && (
+            <SessionsPanel
+              onSessionSelect={(id) => setSelectedSessionId(id)}
+            />
           )}
         </div>
       </main>

@@ -28,9 +28,21 @@ async def stop_session(session_id: str):
     return {"id": session_id, "status": "stopped"}
 
 
+@router.put("/{session_id}/rename")
+async def rename_session(session_id: str, body: dict = None):
+    """Rename a session. Accepts {"name": "..."} in body."""
+    name = body.get("name", "") if body else ""
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    success = session_recorder.rename_session(session_id, name)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"id": session_id, "name": name, "status": "renamed"}
+
+
 @router.get("/{session_id}")
 async def get_session(session_id: str):
-    """Get session details."""
+    """Get session details with all data."""
     session = await session_recorder.load_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -39,7 +51,7 @@ async def get_session(session_id: str):
 
 @router.get("/{session_id}/info")
 async def get_session_info(session_id: str):
-    """Get session metadata."""
+    """Get session metadata (lightweight)."""
     info = session_recorder.get_session_info(session_id)
     if not info:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -68,3 +80,12 @@ async def get_session_metrics(session_id: str, limit: int = 1000):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session.get("metrics", [])[-limit:]
+
+
+@router.get("/{session_id}/events")
+async def get_session_events(session_id: str, limit: int = 1000):
+    """Get events from a session."""
+    session = await session_recorder.load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.get("events", [])[-limit:]

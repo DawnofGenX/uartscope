@@ -1,0 +1,248 @@
+/* Sessions Panel */
+.sessions-panel {
+  max-width: 1000px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Header */
+.sessions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.sessions-filters {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  color: var(--text-tertiary);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  transition: all var(--transition-fast);
+}
+
+.filter-chip:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+.filter-chip.active {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-standard);
+  color: var(--text-primary);
+}
+
+.chip-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.chip-dot.live {
+  background: var(--status-green);
+  animation: livePulse 2s infinite;
+}
+
+.sessions-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.device-select {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  max-width: 220px;
+}
+
+.device-select:focus {
+  outline: none;
+  border-color: var(--brand-violet);
+}
+
+.device-select option {
+  background: var(--bg-surface);
+}
+
+/* Sessions List */
+.sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Session Card */
+.session-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.session-card:hover {
+  border-color: var(--border-standard);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.session-card-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  flex: 1;
+}
+
+.session-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-quaternary);
+}
+
+.session-status-dot.recording {
+  background: var(--status-green);
+  animation: livePulse 2s infinite;
+}
+
+.session-status-dot.completed {
+  background: var(--text-quaternary);
+}
+
+.session-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-meta {
+  font-size: 12px;
+  color: var(--text-quaternary);
+  font-family: var(--font-mono);
+}
+
+.session-live {
+  color: var(--status-green);
+  font-weight: 500;
+}
+
+/* Session Stats */
+.session-card-center {
+  display: flex;
+  gap: var(--space-4);
+  flex-shrink: 0;
+}
+
+.session-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.session-stat-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.session-stat-label {
+  font-size: 10px;
+  color: var(--text-quaternary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* Session Actions */
+.session-card-right {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* Empty State */
+.sessions-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-10);
+  text-align: center;
+}
+
+.sessions-empty .empty-icon {
+  font-size: 40px;
+  color: var(--border-standard);
+  margin-bottom: var(--space-4);
+}
+
+.sessions-empty h3 {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.sessions-empty p {
+  font-size: 14px;
+  color: var(--text-quaternary);
+  max-width: 300px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .session-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+  }
+
+  .session-card-center {
+    width: 100%;
+    justify-content: space-around;
+  }
+
+  .session-card-right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
