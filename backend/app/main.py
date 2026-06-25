@@ -14,6 +14,7 @@ from app.api.routes.telemetry import router as telemetry_router
 from app.api.routes.sessions import router as sessions_router
 from app.api.routes.alerts import router as alerts_router
 from app.api.routes.export import router as export_router
+from app.api.routes.protocols import router as protocols_router
 from app.api.routes.websocket import router as ws_router, setup_telemetry_pipeline
 from app.core.device_manager import device_manager
 from app.core.serial_reader import serial_reader
@@ -90,6 +91,7 @@ app.include_router(telemetry_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(alerts_router, prefix="/api")
 app.include_router(export_router, prefix="/api")
+app.include_router(protocols_router, prefix="/api")
 app.include_router(ws_router, prefix="/api")
 
 

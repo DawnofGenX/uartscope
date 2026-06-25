@@ -5,9 +5,10 @@ import LiveChart from './components/LiveChart'
 import AlertPanel from './components/AlertPanel'
 import SessionsPanel from './components/SessionsPanel'
 import SessionDetail from './components/SessionDetail'
+import ProtocolDecoder from './components/ProtocolDecoder'
 import './styles/app.css'
 
-type View = 'devices' | 'terminal' | 'charts' | 'alerts' | 'sessions'
+type View = 'devices' | 'terminal' | 'charts' | 'alerts' | 'sessions' | 'decoder'
 
 interface Stats {
   total_devices: number
@@ -58,6 +59,7 @@ export default function App() {
     { id: 'charts', label: 'Charts', icon: '◇' },
     { id: 'alerts', label: 'Alerts', icon: '◉' },
     { id: 'sessions', label: 'Sessions', icon: '⟳' },
+    { id: 'decoder', label: 'Decoder', icon: '⬡' },
   ]
 
   // Session detail view is a sub-view
@@ -180,6 +182,7 @@ export default function App() {
               {view === 'charts' && 'Real-time telemetry'}
               {view === 'alerts' && 'Rule-based monitoring'}
               {view === 'sessions' && 'Recording & replay'}
+              {view === 'decoder' && 'I2C, SPI, CAN, Modbus decode'}
             </span>
           </div>
           <div className="top-bar-right">
@@ -216,6 +219,9 @@ export default function App() {
             <SessionsPanel
               onSessionSelect={(id) => setSelectedSessionId(id)}
             />
+          )}
+          {view === 'decoder' && (
+            <ProtocolDecoder />
           )}
         </div>
       </main>
