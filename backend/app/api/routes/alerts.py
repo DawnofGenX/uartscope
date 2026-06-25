@@ -66,9 +66,46 @@ async def enable_rule(rule_id: str, enabled: bool = True):
 
 
 @router.get("/history", response_model=List[dict])
-async def get_alert_history(limit: int = 100):
+async def get_alert_history(limit: int = 100, unacknowledged_only: bool = False):
     """Get alert trigger history."""
-    return alert_engine.get_alert_history(limit)
+    return alert_engine.get_alert_history(limit, unacknowledged_only)
+
+
+@router.post("/acknowledge/{alert_id}")
+async def acknowledge_alert(alert_id: str):
+    """Acknowledge an alert."""
+    success = alert_engine.acknowledge_alert(alert_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"acknowledged": True}
+
+
+@router.post("/acknowledge/all")
+async def acknowledge_all():
+    """Acknowledge all unacknowledged alerts."""
+    count = 0
+    for alert in alert_engine.get_alert_history(unacknowledged_only=True):
+        alert_engine.acknowledge_alert(alert["id"])
+        count += 1
+    return {"acknowledged_count": count}
+
+
+@router.get("/stats")
+async def alert_stats():
+    """Get alert statistics."""
+    history = alert_engine.get_alert_history(limit=10000)
+    unacknowledged = len([a for a in history if not a.get("acknowledged", False)])
+    by_severity = {}
+    for alert in history:
+        sev = alert.get("severity", "warning")
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+    return {
+        "total_alerts": len(history),
+        "unacknowledged": unacknowledged,
+        "by_severity": by_severity,
+        "active_rules": len([r for r in alert_engine.get_all_rules() if r.enabled]),
+        "total_rules": len(alert_engine.get_all_rules()),
+    }
 
 
 @router.post("/test")

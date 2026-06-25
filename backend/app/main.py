@@ -22,6 +22,7 @@ from app.core.telemetry_engine import telemetry_engine
 from app.core.session_recorder import session_recorder
 from app.core.mqtt_client import mqtt_client
 from app.core.websocket_hub import ws_manager
+from app.core.alert_engine import alert_engine
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -53,6 +54,16 @@ async def lifespan(app: FastAPI):
 
     # Start heartbeat monitor for auto-reconnect
     await device_manager.start_heartbeat_monitor()
+
+    # Register alert callback for WebSocket broadcasting
+    async def on_alert(alert):
+        """Broadcast alert events to all connected WebSocket clients."""
+        await ws_manager.broadcast_to_all({
+            "type": "alert",
+            "alert": alert,
+        })
+
+    alert_engine.register_callback(on_alert)
 
     # Auto-connect to first available device (optional)
     if settings.mqtt_enabled:
