@@ -1,62 +1,104 @@
-import { useRef, useEffect } from 'react';
-import { Terminal } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react'
+import { TerminalLine, connectTerminal, fetchHistory } from '../api/terminal'
+import './TerminalView.css'
 
-interface TerminalViewProps {
-  messages: string[];
-  fullHeight?: boolean;
+interface Props {
+  deviceId: string | null
 }
 
-export function TerminalView({ messages, fullHeight }: TerminalViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const autoScroll = useRef(true);
+export default function TerminalView({ deviceId }: Props) {
+  const [lines, setLines] = useState<TerminalLine[]>([])
+  const [connected, setConnected] = useState(false)
+  const termRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (autoScroll.current && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [messages]);
+    if (!deviceId) return
 
-  const handleScroll = () => {
-    if (!containerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    autoScroll.current = scrollHeight - scrollTop - clientHeight < 50;
-  };
+    setLines([])
+    
+    const cleanup = connectTerminal(deviceId, (line) => {
+      setLines((prev) => {
+        const updated = [...prev, line]
+        // Keep last 500 lines for performance
+        if (updated.length > 500) return updated.slice(-500)
+        return updated
+      })
+    })
+
+    setConnected(true)
+
+    return () => {
+      cleanup()
+      setConnected(false)
+    }
+  }, [deviceId])
+
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.scrollTop = termRef.current.scrollHeight
+    }
+  }, [lines])
+
+  if (!deviceId) {
+    return (
+      <div className="terminal-view">
+        <div className="empty-state">
+          <div className="empty-icon">▸</div>
+          <h3>No device selected</h3>
+          <p>Select a device from the Devices view to see its output</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className={`flex h-full flex-col bg-slate-950 ${fullHeight ? 'rounded-lg' : ''}`}>
-      <div className="flex items-center justify-between border-b border-slate-700 px-3 py-2">
-        <div className="flex items-center gap-2">
-          <Terminal className="h-4 w-4 text-emerald-400" />
-          <span className="text-xs font-medium text-slate-300">Serial Terminal</span>
+    <div className="terminal-view">
+      <div className="terminal-toolbar">
+        <div className="terminal-toolbar-left">
+          <span className={`terminal-dot ${connected ? 'live' : ''}`} />
+          <span className="terminal-device-id">Device {deviceId.slice(0, 8)}</span>
+          <span className="terminal-sep">·</span>
+          <span className="terminal-status">
+            {connected ? `${lines.length} lines` : 'Disconnected'}
+          </span>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-slate-500">{messages.length} lines</span>
+        <div className="terminal-toolbar-right">
           <button
-            onClick={() => { autoScroll.current = true; }}
-            className="rounded bg-slate-700 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-600"
+            className="terminal-btn"
+            onClick={() => setLines([])}
+            title="Clear terminal"
           >
-            Auto-scroll
+            Clear
+          </button>
+          <button
+            className="terminal-btn"
+            onClick={() => {
+              if (termRef.current) {
+                termRef.current.scrollTop = termRef.current.scrollHeight
+              }
+            }}
+            title="Scroll to bottom"
+          >
+            Bottom ↓
           </button>
         </div>
       </div>
-      <div
-        ref={containerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-auto p-2 font-mono text-xs"
-      >
-        {messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-slate-600">
-            <p>Waiting for data...</p>
+
+      <div className="terminal-container" ref={termRef}>
+        {lines.length === 0 && connected && (
+          <div className="terminal-waiting">
+            <div className="loading-spinner" />
+            <span>Waiting for data...</span>
           </div>
-        ) : (
-          messages.map((msg, i) => (
-            <div key={i} className="py-0.5">
-              <span className="text-slate-600 mr-2">[{new Date().toLocaleTimeString()}]</span>
-              <span className="text-emerald-300">{msg}</span>
-            </div>
-          ))
         )}
+        
+        {lines.map((line, i) => (
+          <div key={i} className={`terminal-line ${line.type}`}>
+            <span className="terminal-time">{line.timestamp}</span>
+            <span className="terminal-content">{line.content}</span>
+          </div>
+        ))}
       </div>
     </div>
-  );
+  )
 }

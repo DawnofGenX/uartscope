@@ -13,9 +13,9 @@ export interface Device {
 
 export interface TelemetryPoint {
   timestamp: string;
-  metric_name: string;
-  value: number;
-  unit?: string;
+  device_id: string;
+  values: Record<string, number>;
+  raw_message?: string;
   message_type: string;
 }
 

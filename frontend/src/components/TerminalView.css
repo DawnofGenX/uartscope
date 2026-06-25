@@ -1,0 +1,136 @@
+/* Terminal View */
+.terminal-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 120px);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Toolbar */
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.terminal-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.terminal-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-quaternary);
+}
+
+.terminal-dot.live {
+  background: var(--status-green);
+  animation: livePulse 2s infinite;
+}
+
+.terminal-device-id {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.terminal-sep {
+  color: var(--border-standard);
+}
+
+.terminal-status {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.terminal-toolbar-right {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.terminal-btn {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.terminal-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+}
+
+/* Terminal Container */
+.terminal-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Terminal Line */
+.terminal-line {
+  display: flex;
+  gap: var(--space-3);
+  padding: 1px 0;
+}
+
+.terminal-time {
+  color: var(--text-quaternary);
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1.8;
+}
+
+.terminal-content {
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.terminal-line.error .terminal-content {
+  color: var(--status-red);
+}
+
+.terminal-line.warn .terminal-content {
+  color: var(--status-yellow);
+}
+
+.terminal-line.info .terminal-content {
+  color: var(--status-blue);
+}
+
+.terminal-line.data .terminal-content {
+  color: var(--status-green-alt);
+}
+
+/* Waiting State */
+.terminal-waiting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+}
+
+/* Empty State (no device) */
+.empty-state .terminal-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

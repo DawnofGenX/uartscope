@@ -1,11 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { WsMessage } from '../types';
 
-export function useWebSocket(onMessage: (msg: WsMessage) => void) {
+interface UseWebSocketOptions {
+  onMessage: (msg: WsMessage) => void;
+  subscribeTo?: string | 'all' | null;  // device_id or 'all'
+}
+
+export function useWebSocket({ onMessage, subscribeTo }: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const onMessageRef = useRef(onMessage);
+  const subscribeToRef = useRef(subscribeTo);
   onMessageRef.current = onMessage;
+  subscribeToRef.current = subscribeTo;
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -14,6 +21,12 @@ export function useWebSocket(onMessage: (msg: WsMessage) => void) {
     ws.onopen = () => {
       setConnected(true);
       console.log('WebSocket connected');
+      // Subscribe after connection
+      if (subscribeToRef.current === 'all') {
+        ws.send(JSON.stringify({ type: 'subscribe_all' }));
+      } else if (subscribeToRef.current) {
+        ws.send(JSON.stringify({ type: 'subscribe_device', device_id: subscribeToRef.current }));
+      }
     };
 
     ws.onclose = () => {
@@ -45,6 +58,16 @@ export function useWebSocket(onMessage: (msg: WsMessage) => void) {
     }
   }, []);
 
+  const subscribe = useCallback((deviceId: string | 'all') => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      if (deviceId === 'all') {
+        wsRef.current.send(JSON.stringify({ type: 'subscribe_all' }));
+      } else {
+        wsRef.current.send(JSON.stringify({ type: 'subscribe_device', device_id: deviceId }));
+      }
+    }
+  }, []);
+
   useEffect(() => {
     connect();
     return () => {
@@ -52,5 +75,16 @@ export function useWebSocket(onMessage: (msg: WsMessage) => void) {
     };
   }, [connect]);
 
-  return { connected, send };
+  // Re-subscribe when subscribeTo changes
+  useEffect(() => {
+    if (connected && wsRef.current?.readyState === WebSocket.OPEN) {
+      if (subscribeTo === 'all') {
+        wsRef.current.send(JSON.stringify({ type: 'subscribe_all' }));
+      } else if (subscribeTo) {
+        wsRef.current.send(JSON.stringify({ type: 'subscribe_device', device_id: subscribeTo }));
+      }
+    }
+  }, [subscribeTo, connected]);
+
+  return { connected, send, subscribe };
 }

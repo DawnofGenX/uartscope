@@ -1,170 +1,268 @@
-import { useEffect, useState } from 'react';
-import { apiGet, apiPost } from '../api/client';
-import type { AlertRule } from '../types';
-import { AlertTriangle, Bell, Plus, Trash2 } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react'
+import { AlertRule, AlertEvent, listAlertRules, listAlertEvents, createAlertRule, deleteAlertRule } from '../api/alerts'
+import './AlertPanel.css'
 
-interface AlertPanelProps {
-  alerts: any[];
-}
+interface Props {}
 
-export function AlertPanel({ alerts }: AlertPanelProps) {
-  const [rules, setRules] = useState<AlertRule[]>([]);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', metric_name: 'TEMP', condition: 'gt', threshold: 0, severity: 'warning' });
+export default function AlertPanel({}: Props) {
+  const [rules, setRules] = useState<AlertRule[]>([])
+  const [events, setEvents] = useState<AlertEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState({
+    name: '',
+    metric: '',
+    condition: 'gt' as 'gt' | 'lt' | 'eq' | 'range',
+    threshold: 0,
+    threshold_max: 0,
+    device_id: '',
+    cooldown: 60,
+  })
 
-  const fetchRules = async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const data = await apiGet<AlertRule[]>('/api/alerts/rules');
-      setRules(data);
-    } catch (e) {
-      console.error('Failed to fetch rules:', e);
+      const [rulesRes, eventsRes] = await Promise.all([
+        listAlertRules(),
+        listAlertEvents(),
+      ])
+      setRules(rulesRes.rules || [])
+      setEvents(eventsRes.events || [])
+    } catch {
+      // silent
+    } finally {
+      setLoading(false)
     }
-  };
+  }, [])
 
-  const createRule = async () => {
+  useEffect(() => {
+    fetchData()
+    const interval = setInterval(fetchData, 10000)
+    return () => clearInterval(interval)
+  }, [fetchData])
+
+  const handleCreateRule = async (e: React.FormEvent) => {
+    e.preventDefault()
     try {
-      await apiPost('/api/alerts/rules', form);
-      setShowForm(false);
-      setForm({ name: '', metric_name: 'TEMP', condition: 'gt', threshold: 0, severity: 'warning' });
-      fetchRules();
-    } catch (e) {
-      console.error('Failed to create rule:', e);
+      await createAlertRule(form)
+      setShowForm(false)
+      setForm({ name: '', metric: '', condition: 'gt', threshold: 0, threshold_max: 0, device_id: '', cooldown: 60 })
+      await fetchData()
+    } catch {
+      // silent
     }
-  };
+  }
 
-  const deleteRule = async (id: string) => {
+  const handleDeleteRule = async (id: string) => {
     try {
-      await fetch(`/api/alerts/rules/${id}`, { method: 'DELETE' });
-      fetchRules();
-    } catch (e) {
-      console.error('Failed to delete rule:', e);
+      await deleteAlertRule(id)
+      await fetchData()
+    } catch {
+      // silent
     }
-  };
+  }
 
-  useEffect(() => { fetchRules(); }, []);
+  const getConditionLabel = (condition: string) => {
+    switch (condition) {
+      case 'gt': return '>'
+      case 'lt': return '<'
+      case 'eq': return '='
+      case 'range': return '∈'
+      default: return condition
+    }
+  }
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'critical': return 'var(--status-red)'
+      case 'warning': return 'var(--status-yellow)'
+      case 'info': return 'var(--status-blue)'
+      default: return 'var(--text-tertiary)'
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="alert-panel">
+        <div className="loading-state">
+          <div className="loading-spinner" />
+          <span>Loading alerts...</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-slate-700 p-3">
-        <h2 className="text-sm font-semibold text-white">Alerts & Rules</h2>
-        <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-1 rounded bg-emerald-600 px-2 py-1 text-xs text-white hover:bg-emerald-500">
-          <Plus className="h-3 w-3" /> Add Rule
-        </button>
+    <div className="alert-panel">
+      {/* Rules Section */}
+      <div className="alert-section">
+        <div className="alert-section-header">
+          <div>
+            <h3 className="alert-section-title">Alert Rules</h3>
+            <span className="alert-section-count">{rules.length} rule{rules.length !== 1 ? 's' : ''}</span>
+          </div>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => setShowForm(!showForm)}
+          >
+            {showForm ? 'Cancel' : '+ New Rule'}
+          </button>
+        </div>
+
+        {showForm && (
+          <form className="alert-form animate-fade-in" onSubmit={handleCreateRule}>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">Name</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="High temperature alert"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Metric</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="TEMP"
+                  value={form.metric}
+                  onChange={(e) => setForm({ ...form, metric: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">Condition</label>
+                <select
+                  className="form-select"
+                  value={form.condition}
+                  onChange={(e) => setForm({ ...form, condition: e.target.value as any })}
+                >
+                  <option value="gt">Greater than (&gt;)</option>
+                  <option value="lt">Less than (&lt;)</option>
+                  <option value="eq">Equals (=)</option>
+                  <option value="range">In range</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Threshold</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  step="any"
+                  value={form.threshold}
+                  onChange={(e) => setForm({ ...form, threshold: parseFloat(e.target.value) })}
+                  required
+                />
+              </div>
+              {form.condition === 'range' && (
+                <div className="form-group">
+                  <label className="form-label">Max</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    step="any"
+                    value={form.threshold_max}
+                    onChange={(e) => setForm({ ...form, threshold_max: parseFloat(e.target.value) })}
+                    required
+                  />
+                </div>
+              )}
+              <div className="form-group">
+                <label className="form-label">Cooldown (s)</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min="0"
+                  value={form.cooldown}
+                  onChange={(e) => setForm({ ...form, cooldown: parseInt(e.target.value) })}
+                />
+              </div>
+            </div>
+            <button type="submit" className="btn btn-primary">Create Rule</button>
+          </form>
+        )}
+
+        {rules.length === 0 ? (
+          <div className="alert-empty">
+            <p>No alert rules configured</p>
+            <span>Create a rule to get notified when metrics cross thresholds</span>
+          </div>
+        ) : (
+          <div className="alert-rules-list">
+            {rules.map((rule) => (
+              <div key={rule.id} className="rule-card animate-fade-in">
+                <div className="rule-card-left">
+                  <span
+                    className="rule-severity"
+                    style={{ background: getSeverityColor(rule.severity || 'info') }}
+                  />
+                  <div className="rule-info">
+                    <span className="rule-name">{rule.name}</span>
+                    <span className="rule-expression">
+                      {rule.metric} {getConditionLabel(rule.condition)}
+                      {rule.condition === 'range'
+                        ? ` ${rule.threshold} – ${rule.threshold_max}`
+                        : ` ${rule.threshold}`}
+                    </span>
+                  </div>
+                </div>
+                <div className="rule-card-right">
+                  <span className="rule-cooldown">{rule.cooldown}s cooldown</span>
+                  <button
+                    className="btn btn-ghost btn-icon"
+                    onClick={() => handleDeleteRule(rule.id)}
+                    title="Delete rule"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {showForm && (
-        <div className="border-b border-slate-700 bg-slate-800 p-3">
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              type="text"
-              placeholder="Rule name"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="rounded bg-slate-700 px-2 py-1 text-xs text-white placeholder-slate-400 outline-none"
-            />
-            <input
-              type="text"
-              placeholder="Metric (e.g. TEMP)"
-              value={form.metric_name}
-              onChange={(e) => setForm({ ...form, metric_name: e.target.value })}
-              className="rounded bg-slate-700 px-2 py-1 text-xs text-white placeholder-slate-400 outline-none"
-            />
-            <select
-              value={form.condition}
-              onChange={(e) => setForm({ ...form, condition: e.target.value })}
-              className="rounded bg-slate-700 px-2 py-1 text-xs text-white outline-none"
-            >
-              <option value="gt">Greater than (&gt;)</option>
-              <option value="lt">Less than (&lt;)</option>
-              <option value="gte">≥</option>
-              <option value="lte">≤</option>
-              <option value="range">Outside range</option>
-            </select>
-            <input
-              type="number"
-              placeholder="Threshold"
-              value={form.threshold}
-              onChange={(e) => setForm({ ...form, threshold: parseFloat(e.target.value) || 0 })}
-              className="rounded bg-slate-700 px-2 py-1 text-xs text-white placeholder-slate-400 outline-none"
-            />
-            <select
-              value={form.severity}
-              onChange={(e) => setForm({ ...form, severity: e.target.value })}
-              className="rounded bg-slate-700 px-2 py-1 text-xs text-white outline-none"
-            >
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="critical">Critical</option>
-            </select>
-            <button onClick={createRule} className="rounded bg-emerald-600 px-3 py-1 text-xs text-white hover:bg-emerald-500">
-              Create
-            </button>
+      {/* Events Section */}
+      <div className="alert-section">
+        <div className="alert-section-header">
+          <div>
+            <h3 className="alert-section-title">Recent Events</h3>
+            <span className="alert-section-count">{events.length} event{events.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
-      )}
 
-      <div className="flex-1 overflow-y-auto p-3">
-        {/* Active Rules */}
-        <div className="mb-4">
-          <h3 className="mb-2 text-xs font-medium uppercase text-slate-500">Alert Rules ({rules.length})</h3>
-          {rules.length === 0 ? (
-            <p className="text-xs text-slate-500">No rules configured</p>
-          ) : (
-            <div className="space-y-1">
-              {rules.map((rule) => (
-                <div key={rule.id} className="flex items-center justify-between rounded bg-slate-800 px-3 py-2">
-                  <div>
-                    <div className="text-xs text-white">{rule.name}</div>
-                    <div className="text-[10px] text-slate-400">
-                      {rule.metric_name} {rule.condition} {rule.threshold} • {rule.severity}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {rule.trigger_count ? (
-                      <span className="rounded bg-amber-600 px-1.5 py-0.5 text-[9px] text-white">{rule.trigger_count} triggers</span>
-                    ) : null}
-                    <button onClick={() => deleteRule(rule.id)} className="text-slate-400 hover:text-red-400">
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Recent Alerts */}
-        <div>
-          <h3 className="mb-2 text-xs font-medium uppercase text-slate-500">Recent Alerts ({alerts.length})</h3>
-          {alerts.length === 0 ? (
-            <div className="flex flex-col items-center py-6 text-slate-500">
-              <Bell className="mb-2 h-6 w-6 opacity-50" />
-              <p className="text-xs">No alerts triggered</p>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {alerts.slice(0, 20).map((alert, i) => (
-                <div key={i} className={`rounded px-3 py-2 text-xs ${
-                  alert.severity === 'critical' ? 'bg-red-900/30 border border-red-800' :
-                  alert.severity === 'warning' ? 'bg-amber-900/30 border border-amber-800' :
-                  'bg-blue-900/30 border border-blue-800'
-                }`}>
-                  <div className="flex items-center gap-2">
-                    <AlertTriangle className={`h-3 w-3 ${
-                      alert.severity === 'critical' ? 'text-red-400' :
-                      alert.severity === 'warning' ? 'text-amber-400' : 'text-blue-400'
-                    }`} />
-                    <span className="font-medium text-white">{alert.rule_name || alert.message}</span>
-                  </div>
-                  <div className="mt-1 text-[10px] text-slate-400">
-                    {alert.metric_name}: {alert.value} • {new Date(alert.timestamp).toLocaleTimeString()}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {events.length === 0 ? (
+          <div className="alert-empty">
+            <p>No events yet</p>
+            <span>Alert events will appear here when rules are triggered</span>
+          </div>
+        ) : (
+          <div className="alert-events-list">
+            {events.slice(0, 20).map((event, i) => (
+              <div key={i} className="event-row animate-slide-in">
+                <span
+                  className="event-severity-dot"
+                  style={{ background: getSeverityColor(event.severity) }}
+                />
+                <span className="event-time">
+                  {new Date(event.timestamp).toLocaleTimeString([], {
+                    hour12: false,
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })}
+                </span>
+                <span className="event-message">{event.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
-  );
+  )
 }

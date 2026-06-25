@@ -20,31 +20,67 @@ async def detect_devices():
 @router.post("/", response_model=DeviceResponse)
 async def create_device(device: DeviceCreate, db: AsyncSession = Depends(get_db)):
     """Register a new device."""
+    # Check if port already registered (in memory or DB)
     existing = [d for d in device_manager.get_all_devices() if d.port == device.port]
     if existing:
         raise HTTPException(status_code=409, detail=f"Device on {device.port} already registered")
 
-    dev = await device_manager.add_device(device)
-    # Save to database
+    # Check DB for existing device with this port
     from app.database import DeviceModel
+    from sqlalchemy import select
+    result = await db.execute(
+        select(DeviceModel).where(DeviceModel.port == device.port)
+    )
+    db_existing = result.scalar_one_or_none()
+    if db_existing:
+        # Re-use existing DB record and register in memory
+        dev = await device_manager.add_device_with_id(
+            str(db_existing.id), device
+        )
+        return dev.to_response()
+
+    # Save to database first to get UUID
     db_device = DeviceModel(
-        name=dev.name,
-        port=dev.port,
-        protocol=dev.protocol,
-        baudrate=dev.baudrate,
-        board_type=dev.board_type,
+        name=device.name or device.port,
+        port=device.port,
+        protocol=device.protocol,
+        baudrate=device.baudrate,
+        board_type=device.board_type,
         metadata_json=device.metadata,
     )
     db.add(db_device)
     await db.commit()
     await db.refresh(db_device)
-    dev.id = str(db_device.id)
+
+    # Register in DeviceManager with DB UUID as id
+    dev = await device_manager.add_device_with_id(
+        str(db_device.id), device
+    )
     return dev.to_response()
 
 
 @router.get("/", response_model=List[DeviceResponse])
-async def list_devices():
-    """List all registered devices."""
+async def list_devices(db: AsyncSession = Depends(get_db)):
+    """List all registered devices (from database)."""
+    from app.database import DeviceModel
+    from sqlalchemy import select
+    result = await db.execute(select(DeviceModel))
+    db_devices = result.scalars().all()
+
+    # Sync DB devices into DeviceManager
+    for db_dev in db_devices:
+        if not device_manager.get_device(str(db_dev.id)):
+            device_manager.register_device_from_db(
+                str(db_dev.id),
+                DeviceCreate(
+                    name=db_dev.name,
+                    port=db_dev.port,
+                    protocol=db_dev.protocol,
+                    baudrate=db_dev.baudrate,
+                    board_type=db_dev.board_type,
+                ),
+            )
+
     devices = device_manager.get_all_devices()
     return [d.to_response() for d in devices]
 

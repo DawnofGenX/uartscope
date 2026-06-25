@@ -1,4 +1,4 @@
-"""Device Manager — detects, tracks, and manages connected embedded devices."""
+"""Device Manager — detects, tracks, and manages multiple connected embedded devices."""
 import asyncio
 import logging
 from typing import Dict, List, Optional
@@ -29,6 +29,10 @@ class DeviceInfo:
         self.last_seen: Optional[datetime] = None
         self.bytes_received = 0
         self.packet_count = 0
+        self.error_count = 0
+        self.session_id: Optional[str] = None
+        self.auto_reconnect = True
+        self._reconnect_task: Optional[asyncio.Task] = None
 
     def to_response(self) -> DeviceResponse:
         return DeviceResponse(
@@ -46,12 +50,61 @@ class DeviceInfo:
 
 
 class DeviceManager:
-    """Manages device lifecycle: detection, connection, tracking."""
+    """Manages device lifecycle: detection, connection, tracking, heartbeat, auto-reconnect."""
 
     def __init__(self):
         self._devices: Dict[str, DeviceInfo] = {}  # id -> DeviceInfo
         self._port_map: Dict[str, str] = {}  # port -> device_id
         self._lock = asyncio.Lock()
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._heartbeat_interval = 5.0  # seconds
+        self._stale_threshold = 30.0  # seconds before marking stale
+
+    async def start_heartbeat_monitor(self):
+        """Start background task to monitor device health."""
+        if self._heartbeat_task is None:
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            logger.info("Heartbeat monitor started")
+
+    async def stop_heartbeat_monitor(self):
+        """Stop heartbeat monitor."""
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self._heartbeat_task = None
+
+    async def _heartbeat_loop(self):
+        """Periodically check device health and trigger auto-reconnect."""
+        while True:
+            try:
+                await asyncio.sleep(self._heartbeat_interval)
+                now = datetime.utcnow()
+                for device in list(self._devices.values()):
+                    # Check for stale connections (no data received recently)
+                    if device.status == "connected" and device.last_seen:
+                        elapsed = (now - device.last_seen).total_seconds()
+                        if elapsed > self._stale_threshold:
+                            logger.warning(
+                                f"Device {device.name} stale for {elapsed:.0f}s, "
+                                f"last seen {device.last_seen.isoformat()}"
+                            )
+
+                    # Auto-reconnect logic
+                    if (
+                        device.auto_reconnect
+                        and device.status in ("disconnected", "error")
+                        and device.serial_conn is None
+                    ):
+                        logger.info(f"Auto-reconnecting {device.name}...")
+                        await self.connect(device.id)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Heartbeat error: {e}")
 
     async def detect_ports(self) -> List[Dict]:
         """Auto-detect connected serial devices."""
@@ -90,7 +143,7 @@ class DeviceManager:
         return "Unknown"
 
     async def add_device(self, create: DeviceCreate) -> DeviceInfo:
-        """Register a new device and attempt initial connection."""
+        """Register a new device with auto-generated ID."""
         async with self._lock:
             if create.port in self._port_map:
                 device_id = self._port_map[create.port]
@@ -105,11 +158,55 @@ class DeviceManager:
             logger.info(f"Device added: {device.name} on {device.port} ({device.board_type})")
             return device
 
+    def register_device_from_db(self, device_id: str, create: DeviceCreate) -> DeviceInfo:
+        """Register a device from database (synchronous, for startup/refresh)."""
+        if device_id in self._devices:
+            return self._devices[device_id]
+        if create.port in self._port_map:
+            existing_id = self._port_map[create.port]
+            if existing_id != device_id:
+                return self._devices[existing_id]
+
+        device = DeviceInfo(create)
+        device.id = device_id
+        device.status = "disconnected"
+        self._devices[device.id] = device
+        self._port_map[create.port] = device.id
+        return device
+
+    async def add_device_with_id(self, device_id: str, create: DeviceCreate) -> DeviceInfo:
+        """Register a new device with a specific ID (e.g., from database UUID)."""
+        async with self._lock:
+            if create.port in self._port_map:
+                existing_id = self._port_map[create.port]
+                return self._devices[existing_id]
+
+            # Remove any existing device with this ID
+            if device_id in self._devices:
+                old = self._devices.pop(device_id)
+                self._port_map.pop(old.port, None)
+
+            device = DeviceInfo(create)
+            device.id = device_id
+            device.status = "detected"
+            self._devices[device.id] = device
+            self._port_map[create.port] = device.id
+
+            logger.info(f"Device added: {device.name} on {device.port} (id={device.id})")
+            return device
+
     async def connect(self, device_id: str) -> bool:
         """Open serial connection to a device."""
         device = self._devices.get(device_id)
         if not device:
             return False
+
+        # Close existing connection if any
+        if device.serial_conn and device.serial_conn.is_open:
+            try:
+                device.serial_conn.close()
+            except Exception:
+                pass
 
         try:
             device.serial_conn = serial.Serial(
@@ -120,10 +217,13 @@ class DeviceManager:
             )
             device.status = "connected"
             device.last_seen = datetime.utcnow()
+            device.error_count = 0
             logger.info(f"Connected to {device.name} @ {device.baudrate} baud")
             return True
         except serial.SerialException as e:
             device.status = "error"
+            device.serial_conn = None
+            device.error_count += 1
             logger.error(f"Failed to connect to {device.name}: {e}")
             return False
 
@@ -154,6 +254,8 @@ class DeviceManager:
                         device.serial_conn.close()
                     except Exception:
                         pass
+                if device._reconnect_task:
+                    device._reconnect_task.cancel()
 
     def get_device(self, device_id: str) -> Optional[DeviceInfo]:
         return self._devices.get(device_id)
@@ -161,12 +263,13 @@ class DeviceManager:
     def get_all_devices(self) -> List[DeviceInfo]:
         return list(self._devices.values())
 
-    def get_connected_device(self) -> Optional[DeviceInfo]:
-        """Get first connected device (for single-device mode)."""
-        for device in self._devices.values():
-            if device.status == "connected":
-                return device
-        return None
+    def get_connected_devices(self) -> List[DeviceInfo]:
+        """Get all currently connected devices."""
+        return [d for d in self._devices.values() if d.status == "connected"]
+
+    def get_streaming_devices(self) -> List[DeviceInfo]:
+        """Get all devices currently streaming."""
+        return [d for d in self._devices.values() if d.session_id is not None]
 
     async def write(self, device_id: str, data: bytes) -> bool:
         """Send data to a device."""
@@ -178,6 +281,23 @@ class DeviceManager:
             return True
         except serial.SerialException:
             return False
+
+    def get_stats(self) -> Dict:
+        """Get aggregate device statistics."""
+        total = len(self._devices)
+        connected = sum(1 for d in self._devices.values() if d.status == "connected")
+        streaming = sum(1 for d in self._devices.values() if d.session_id)
+        errors = sum(1 for d in self._devices.values() if d.status == "error")
+        total_bytes = sum(d.bytes_received for d in self._devices.values())
+        total_packets = sum(d.packet_count for d in self._devices.values())
+        return {
+            "total": total,
+            "connected": connected,
+            "streaming": streaming,
+            "errors": errors,
+            "total_bytes_received": total_bytes,
+            "total_packets": total_packets,
+        }
 
 
 # Singleton

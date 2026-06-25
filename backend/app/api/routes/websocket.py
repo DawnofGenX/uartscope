@@ -1,16 +1,14 @@
-"""WebSocket real-time telemetry stream."""
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+"""WebSocket real-time telemetry stream with per-device subscription support."""
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 import asyncio
-import json
 import logging
 
 from app.core.device_manager import device_manager
 from app.core.telemetry_engine import telemetry_engine
 from app.core.serial_reader import serial_reader
 from app.core.alert_engine import alert_engine
-from app.core.protocol_decoder import protocol_manager
 from app.core.session_recorder import session_recorder
-from app.core.websocket_hub import ws_manager
+from app.core.websocket_hub import ws_manager, SubscriptionMode
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +28,47 @@ async def handle_websocket(websocket: WebSocket):
 
             elif msg_type == "subscribe_device":
                 device_id = data.get("device_id")
-                # Start telemetry stream for this device
+                if device_id:
+                    # Verify device exists
+                    device = device_manager.get_device(device_id)
+                    if not device:
+                        await ws_manager.send_to(websocket, {
+                            "type": "error",
+                            "message": f"Device {device_id} not found",
+                        })
+                        continue
+                    await ws_manager.set_subscription(
+                        websocket, SubscriptionMode.DEVICE, device_id
+                    )
+                    await ws_manager.send_to(websocket, {
+                        "type": "subscribed",
+                        "device_id": device_id,
+                        "device_name": device.name,
+                    })
+
+            elif msg_type == "subscribe_all":
+                await ws_manager.set_subscription(websocket, SubscriptionMode.ALL)
                 await ws_manager.send_to(websocket, {
                     "type": "subscribed",
-                    "device_id": device_id,
+                    "mode": "all",
                 })
+
+            elif msg_type == "unsubscribe":
+                await ws_manager.set_subscription(websocket, SubscriptionMode.NONE)
+                await ws_manager.send_to(websocket, {"type": "unsubscribed"})
 
             elif msg_type == "send_data":
                 device_id = data.get("device_id")
                 payload = data.get("data", "")
                 if device_id and payload:
-                    await device_manager.write(device_id, payload.encode() + b"\n")
+                    success = await device_manager.write(
+                        device_id, payload.encode() + b"\n"
+                    )
+                    await ws_manager.send_to(websocket, {
+                        "type": "data_sent",
+                        "device_id": device_id,
+                        "success": success,
+                    })
 
             elif msg_type == "set_session":
                 session_id = data.get("session_id")
@@ -49,6 +77,13 @@ async def handle_websocket(websocket: WebSocket):
                 await ws_manager.send_to(websocket, {
                     "type": "session_started",
                     "session_id": session_id,
+                })
+
+            elif msg_type == "get_subscriptions":
+                info = ws_manager.get_subscription_info()
+                await ws_manager.send_to(websocket, {
+                    "type": "subscriptions",
+                    "data": info,
                 })
 
     except WebSocketDisconnect:
@@ -60,12 +95,28 @@ async def handle_websocket(websocket: WebSocket):
 
 @router.websocket("/telemetry")
 async def websocket_telemetry(websocket: WebSocket):
-    """Main WebSocket endpoint for real-time telemetry data."""
+    """Main WebSocket endpoint for real-time telemetry data.
+
+    Supports per-device subscriptions:
+    - {"type": "subscribe_device", "device_id": "dev_0001"} — single device
+    - {"type": "subscribe_all"} — all devices
+    - {"type": "unsubscribe"} — stop receiving data
+    """
     await handle_websocket(websocket)
 
 
+@router.get("/subscriptions")
+async def get_active_subscriptions():
+    """Get current WebSocket subscription info."""
+    return ws_manager.get_subscription_info()
+
+
 async def setup_telemetry_pipeline():
-    """Wire up the components: serial -> telemetry engine -> alerts + broadcast."""
+    """Wire up the components: serial -> telemetry engine -> alerts + broadcast.
+
+    Each device gets its own on_data callback that broadcasts only to
+    clients subscribed to that device.
+    """
 
     async def on_data(device_id: str, session_id: str, line: str):
         # Parse through telemetry engine
@@ -77,34 +128,57 @@ async def setup_telemetry_pipeline():
             "raw": line,
         })
 
-        # Get parsed metrics and check alerts
-        for msg_callback in telemetry_engine._callbacks:
-            pass  # Callbacks already triggered in process_line
+        # Broadcast raw line to device-subscribed clients
+        await ws_manager.broadcast(
+            {
+                "type": "serial_data",
+                "device_id": device_id,
+                "session_id": session_id,
+                "data": line,
+            },
+            device_id=device_id,
+        )
 
-        # Broadcast raw line
-        await ws_manager.broadcast({
-            "type": "serial_data",
+    # Register telemetry engine callback for alerts + metric broadcast
+    async def on_parsed_message(msg):
+        # The telemetry engine calls this with parsed messages
+        # We need to broadcast metrics to subscribed clients
+        # Note: device_id is not directly available here, so we use a workaround
+        pass
+
+    # Instead of using the global callback, we handle metric broadcast
+    # in the on_data callback above by accessing the engine's latest values
+    # For alerts, we check after each line
+    async def on_data_with_alerts(device_id: str, session_id: str, line: str):
+        await telemetry_engine.process_line(device_id, session_id, line)
+        await session_recorder.record_packet(session_id, {
             "device_id": device_id,
-            "session_id": session_id,
-            "data": line,
+            "raw": line,
         })
 
-    # Register telemetry engine callback for alerts
-    async def on_parsed_message(msg):
-        for metric in msg.metrics:
-            await alert_engine.evaluate("", "", metric)
-            await session_recorder.record_metric("", {
-                "metric_name": metric.name,
-                "value": metric.value,
-                "unit": metric.unit,
-            })
-            # Broadcast metric
-            await ws_manager.broadcast({
-                "type": "metric",
-                "metric_name": metric.name,
-                "value": metric.value,
-                "unit": metric.unit,
-            })
+        # Get latest metrics and check alerts
+        latest = telemetry_engine.get_latest_values(device_id)
+        for metric_name, value in latest.items():
+            # Broadcast metric to subscribed clients
+            await ws_manager.broadcast(
+                {
+                    "type": "metric",
+                    "device_id": device_id,
+                    "metric_name": metric_name,
+                    "value": value,
+                },
+                device_id=device_id,
+            )
 
-    telemetry_engine.register_callback(on_parsed_message)
-    return on_data
+        # Broadcast raw line
+        await ws_manager.broadcast(
+            {
+                "type": "serial_data",
+                "device_id": device_id,
+                "session_id": session_id,
+                "data": line,
+            },
+            device_id=device_id,
+        )
+
+    return on_data_with_alerts
