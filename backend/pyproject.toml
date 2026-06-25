@@ -1,0 +1,41 @@
+[project]
+name = "uartscope-pro"
+version = "0.1.0"
+description = "Open-source embedded telemetry and debugging platform — the Wireshark of microcontrollers"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.20.0",
+    "pyserial>=3.5",
+    "websockets>=13.0",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.12",
+    "paho-mqtt>=2.1.0",
+    "aiomqtt>=2.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-httpx>=0.32.0",
+]
+pg = [
+    "asyncpg>=0.30.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,92 @@
+uartscope/
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py              # FastAPI app entry
+│   │   ├── config.py             # Settings/env config
+│   │   ├── database.py           # SQLite/PostgreSQL setup
+│   │   ├── models/               # SQLAlchemy/Pydantic models
+│   │   │   ├── __init__.py
+│   │   │   ├── device.py
+│   │   │   ├── telemetry.py
+│   │   │   ├── session.py
+│   │   │   └── alert.py
+│   │   ├── core/
+│   │   │   ├── __init__.py
+│   │   │   ├── device_manager.py
+│   │   │   ├── telemetry_engine.py
+│   │   │   ├── serial_reader.py
+│   │   │   ├── session_recorder.py
+│   │   │   ├── alert_engine.py
+│   │   │   ├── protocol_decoder.py
+│   │   │   └── mqtt_client.py
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   ├── routes/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── devices.py
+│   │   │   │   ├── telemetry.py
+│   │   │   │   ├── sessions.py
+│   │   │   │   ├── alerts.py
+│   │   │   │   ├── export.py
+│   │   │   │   └── websocket.py
+│   │   │   └── deps.py
+│   │   ├── plugins/
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py
+│   │   │   ├── uart_decoder.py
+│   │   │   └── custom_protocols.py
+│   │   └── storage/
+│   │       ├── __init__.py
+│   │       ├── sqlite_store.py
+│   │       └── postgres_store.py
+│   ├── tests/
+│   │   ├── __init__.py
+│   │   ├── test_device_manager.py
+│   │   ├── test_telemetry.py
+│   │   └── test_serial.py
+│   ├── requirements.txt
+│   ├── pyproject.toml
+│   └── Dockerfile
+├── frontend/
+│   ├── src/
+│   │   ├── main.tsx
+│   │   ├── App.tsx
+│   │   ├── api/
+│   │   │   ├── client.ts
+│   │   │   └── websocket.ts
+│   │   ├── components/
+│   │   │   ├── Dashboard.tsx
+│   │   │   ├── TerminalView.tsx
+│   │   │   ├── LiveChart.tsx
+│   │   │   ├── DevicePanel.tsx
+│   │   │   ├── PacketInspector.tsx
+│   │   │   ├── AlertPanel.tsx
+│   │   │   ├── SessionPlayer.tsx
+│   │   │   └── Settings.tsx
+│   │   ├── hooks/
+│   │   │   ├── useTelemetry.ts
+│   │   │   ├── useDevices.ts
+│   │   │   └── useAlerts.ts
+│   │   ├── types/
+│   │   │   └── index.ts
+│   │   └── styles/
+│   │       └── globals.css
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   └── index.html
+├── docs/
+│   ├── architecture.md
+│   ├── api_reference.md
+│   ├── plugin_development.md
+│   └── getting_started.md
+├── scripts/
+│   └── simulate_device.py
+├── docker-compose.yml
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── .gitignore
+├── README.md
+└── LICENSE
