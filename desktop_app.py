@@ -1,4 +1,4 @@
-"""UARTScope Pro — Desktop Application (NiceGUI)"""
+"""UARTScope Pro - Desktop Application (NiceGUI)"""
 import asyncio
 import json
 import logging
@@ -44,13 +44,13 @@ def format_duration(started, ended=None, seconds=None):
             e = datetime.fromisoformat(ended) if ended else datetime.utcnow()
             d = int((e - s).total_seconds())
     except:
-        return "—"
+        return "-"
     if d < 60: return f"{d}s"
     if d < 3600: return f"{d//60}m {d%60}s"
     return f"{d//3600}h {(d%3600)//60}m"
 
 def severity_color(sev):
-    return {'critical': '#e5484d', 'warning': '#f5a623', 'info': '#3b82f6'}.get(sev, '#8a8f98')
+    return {'critical': '#ef4444', 'warning': '#eab308', 'info': '#3b82f6'}.get(sev, '#71717a')
 
 def get_stats():
     return device_manager.get_stats()
@@ -69,11 +69,11 @@ def get_sessions():
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 def build_sidebar():
-    with ui.left_drawer(fixed=True).classes('bg-[#0f1011] border-r border-[rgba(255,255,255,0.05)]').style('width: 220px'):
-        with ui.column().classes('p-4 gap-1'):
+    with ui.left_drawer(fixed=True).classes('bg-[#0d0f12] border-r border-[rgba(255,255,255,0.06)]').style('width: 56px'):
+        with ui.column().classes('px-2 py-4 gap-0.5'):
             with ui.row().classes('items-center gap-2 mb-6'):
-                ui.label('◈').classes('text-[#7170ff] text-xl')
-                ui.label('UARTScope').classes('text-white font-medium')
+                ui.label('◈').classes('text-[#5c8af0] text-xl')
+                ui.label('UART').classes('text-white font-semibold text-sm tracking-wide')
 
             nav_items = [
                 ('devices', '◈', 'Devices'),
@@ -89,32 +89,32 @@ def build_sidebar():
 
             for tab_id, icon, label in nav_items:
                 is_active = current_tab == tab_id
-                bg = 'rgba(255,255,255,0.05)' if is_active else 'transparent'
-                text_color = '#f7f8f8' if is_active else '#8a8f98'
-                active_border = 'border-l-2 border-[#7170ff]' if is_active else ''
+                bg = 'rgba(255,255,255,0.06)' if is_active else 'transparent'
+                text_color = '#f7f8f8' if is_active else '#71717a'
+                active_border = 'border-l-[3px] border-[#5c8af0]' if is_active else ''
                 ui.button(
-                    f'{icon}  {label}',
+                    f'{icon}',
                     on_click=lambda t=tab_id: switch_tab(t)
                 ).props(f'flat no-caps').classes(
-                    f'w-full justify-start px-3 py-2 rounded-md text-left {active_border}'
+                    f'w-full justify-center px-0 py-2.5 rounded-lg text-center {active_border}'
                 ).style(f'background: {bg}; color: {text_color}')
 
         # Footer stats
         stats = get_stats()
-        with ui.column().classes('mt-auto p-4 border-t border-[rgba(255,255,255,0.05)] gap-2'):
+        with ui.column().classes('mt-auto px-3 py-4 border-t border-[rgba(255,255,255,0.06)] gap-3'):
             with ui.row().classes('justify-between'):
                 ui.label(f"{stats['connected']}/{stats['total']}").classes('text-white text-sm font-mono')
-                ui.label('Devices').classes('text-[#62666d] text-xs uppercase')
+                ui.label('DEV').classes('text-[#52525b] text-[10px] uppercase tracking-widest')
             with ui.row().classes('justify-between'):
                 ui.label(format_bytes(stats['total_bytes_received'])).classes('text-white text-sm font-mono')
-                ui.label('Data').classes('text-[#62666d] text-xs uppercase')
+                ui.label('DATA').classes('text-[#52525b] text-[10px] uppercase tracking-widest')
 
 
 # ─── Pages ───────────────────────────────────────────────────────────────────
 
 def devices_page():
-    """Devices panel — register, start/stop, auto-reconnect."""
-    container = ui.column().classes('w-full gap-3')
+    """Devices panel - register, start/stop, auto-reconnect."""
+    container = ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto')
 
     def refresh_devices():
         stats = get_stats()
@@ -122,45 +122,45 @@ def devices_page():
         container.clear()
 
         # Stats bar
-        with ui.row().classes('w-full gap-3 mb-2'):
+        with ui.row().classes('w-full gap-3 mb-4'):
             for label, val in [
                 ('Devices', f"{stats['connected']}/{stats['total']}"),
                 ('Data', format_bytes(stats['total_bytes_received'])),
                 ('Streaming', str(stats['streaming'])),
                 ('WS Clients', str(stats.get('websocket_clients', 0))),
             ]:
-                with ui.card().classes('flex-1 p-3') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
-                    ui.label(val).classes('text-xl font-medium text-white')
-                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+                with ui.card().classes('flex-1 p-4') \
+                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
+                    ui.label(val).classes('text-2xl font-semibold text-white')
+                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
 
         if not devices:
             with container:
-                with ui.card().classes('w-full p-8 text-center') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
-                    ui.label('◈').classes('text-4xl text-[#23252a] mb-2')
-                    ui.label('No devices registered').classes('text-[#d0d6e0] font-medium')
-                    ui.label('Connect a serial device to get started').classes('text-[#62666d] text-sm')
+                with ui.card().classes('w-full p-12 text-center') \
+                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
+                    ui.label('◈').classes('text-4xl text-[#5c8af0] mb-2')
+                    ui.label('No devices connected').classes('text-[#e4e4e7] font-semibold text-lg')
+                    ui.label('Connect a serial device to start monitoring').classes('text-[#52525b] text-sm mt-1')
         else:
             for device in devices:
                 with container:
                     with ui.card().classes('w-full p-4') \
-                        .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
-                        with ui.row().classes('w-full items-center justify-between'):
-                            with ui.column().classes('gap-1'):
+                        .style('background: #16181d; border-left: 2px solid #5c8af0'):
+                        with ui.row().classes('w-full items-center justify-between mb-3'):
+                            with ui.column().classes('gap-0.5'):
                                 with ui.row().classes('items-center gap-2'):
-                                    sc = '#27a644' if device.status == 'streaming' else ('#3b82f6' if device.status == 'connected' else '#62666d')
-                                    ui.label('●').classes('text-xs').style(f'color: {sc}')
-                                    ui.label(device.name or 'Unnamed').classes('text-white font-medium')
-                                ui.label(f"{device.port} · {device.baudrate} baud").classes('text-[#62666d] text-xs font-mono')
-                            with ui.row().classes('gap-2'):
+                                    sc = '#22c55e' if device.status == 'streaming' else ('#3b82f6' if device.status == 'connected' else '#52525b')
+                                    ui.label(' ').classes('inline-block w-2 h-2 rounded-full').style(f'background: {sc}')
+                                    ui.label(device.name or 'Unnamed').classes('text-white font-semibold')
+                                ui.label(f"{device.port} · {device.baudrate} baud").classes('text-[#52525b] text-xs font-mono')
+                            with ui.row().classes('gap-2 mt-1'):
                                 if device.status == 'streaming':
-                                    ui.button('Stop', on_click=lambda d=device: stop_device(d)).classes('bg-[#e5484d] text-white px-3 py-1 text-sm rounded-md')
-                                    ui.button('Terminal', on_click=lambda d=device: open_terminal(d)).classes('bg-[#5e6ad2] text-white px-3 py-1 text-sm rounded-md')
+                                    ui.button('Stop', on_click=lambda d=device: stop_device(d)).classes('bg-[#ef4444] text-white px-4 py-1.5 text-sm rounded-lg font-medium')
+                                    ui.button('Terminal', on_click=lambda d=device: open_terminal(d)).classes('bg-[#5c6fd0] text-white px-4 py-1.5 text-sm rounded-lg font-medium')
                                 else:
                                     ui.button(f"{'⟳ Auto' if device.auto_reconnect else '⟳ Manual'}",
-                                              on_click=lambda d=device: toggle_reconnect(d)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
-                                    ui.button('Start', on_click=lambda d=device: start_device(d)).classes('bg-[#5e6ad2] text-white px-3 py-1 text-sm rounded-md')
+                                              on_click=lambda d=device: toggle_reconnect(d)).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
+                                    ui.button('Start', on_click=lambda d=device: start_device(d)).classes('bg-[#5c6fd0] text-white px-4 py-1.5 text-sm rounded-lg font-medium')
 
     async def start_device(device):
         try:
@@ -211,28 +211,28 @@ def devices_page():
 
 
 def terminal_page():
-    """Terminal view — real-time serial output with search & filter."""
+    """Terminal view - real-time serial output with search & filter."""
     global selected_device
 
     if not selected_device:
-        ui.label('No device selected — go to Devices tab').classes('text-[#62666d]').style('padding: 40px')
+        ui.label('Select a device from the Devices tab to open the terminal').classes('text-[#52525b] text-sm').style('padding: 60px')
         return
 
     # State for terminal
     terminal_state = {'lines': [], 'search': '', 'case_sensitive': False, 'regex': False, 'match_count': 0, 'current_match': 0, 'filter_level': 'all', 'filter_metric': ''}
 
-    with ui.column().classes('w-full gap-2'):
+    with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
         # Header
-        with ui.row().classes('w-full items-center justify-between'):
-            ui.label(f"Device: {selected_device.name} ({selected_device.port})").classes('text-[#8a8f98] text-sm')
-            ui.label('0 lines').classes('text-[#62666d] text-xs font-mono').bind_text_from(terminal_state, 'match_count', lambda v: f"{len(terminal_state['lines'])} lines")
+        with ui.row().classes('w-full items-center justify-between mb-3'):
+            ui.label(f"{selected_device.name}  /  {selected_device.port}").classes('text-[#71717a] text-sm font-mono')
+            ui.label('0 lines').classes('text-[#52525b] text-xs font-mono').bind_text_from(terminal_state, 'lines', lambda v: f"{len(v)} lines")
 
         # Command bar
-        with ui.row().classes('w-full gap-2 items-center'):
-            cmd_input = ui.input('Send command', placeholder='Type a command and press Enter...').classes('flex-1').props('outlined dense').style('color: #d0d6e0; font-family: JetBrains Mono, monospace; font-size: 12px')
-            ui.button('Send', on_click=lambda: send_command()).classes('bg-[#27a644] text-white px-3 py-1 text-sm rounded-md')
-            ui.button('Macros ▾', on_click=show_macros_dialog).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
-            ui.button('History ▾', on_click=show_history_dialog).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
+        with ui.row().classes('w-full gap-2 items-center p-3').style('background: #16181d; border-radius: 8px'):
+            cmd_input = ui.input('Send command', placeholder='Type a command and press Enter...').classes('flex-1').props('outlined dense').style('color: #e4e4e7; font-family: JetBrains Mono, monospace; font-size: 12px')
+            ui.button('Send', on_click=lambda: send_command()).classes('bg-[#22c55e] text-white px-4 py-1.5 text-sm rounded-lg font-medium')
+            ui.button('Macros ▾', on_click=show_macros_dialog).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
+            ui.button('History ▾', on_click=show_history_dialog).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
 
         # Command state
         command_history = []  # list of {'cmd': str, 'timestamp': str}
@@ -265,49 +265,49 @@ def terminal_page():
     def show_history_dialog():
         """Show command history dialog."""
         dialog = ui.dialog()
-        with dialog, ui.card().classes('p-4 w-96 max-h-80 overflow-y-auto').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
-            ui.label('Command History').classes('text-white font-medium mb-3')
+        with dialog, ui.card().classes('p-4 w-96 max-h-80 overflow-y-auto').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
+            ui.label('Command History').classes('text-white font-semibold mb-4')
             if not command_history:
-                ui.label('No commands sent yet').classes('text-[#62666d] text-sm py-4')
+                ui.label('No commands in history').classes('text-[#52525b] text-sm py-6')
             else:
-                with ui.column().classes('w-full gap-1'):
+                with ui.column().classes('w-full gap-0.5'):
                     for entry in command_history[:20]:
-                        with ui.row().classes('w-full items-center gap-2 p-2 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.03)]') \
+                        with ui.row().classes('w-full items-center gap-3 px-3 py-2 rounded-lg hover:bg-[rgba(255,255,255,0.03)]') \
                             .on('click', lambda e=entry: replay_command(e)):
-                            ui.label(entry['timestamp']).classes('text-[#62666d] text-xs font-mono')
-                            ui.label(entry['cmd']).classes('text-[#d0d6e0] text-sm font-mono flex-1')
-                            ui.label('↗').classes('text-[#7170ff] text-xs')
+                            ui.label(entry['timestamp']).classes('text-[#52525b] text-xs font-mono w-16')
+                            ui.label(entry['cmd']).classes('text-[#e4e4e7] text-sm font-mono flex-1')
+                            ui.label('↗').classes('text-[#5c8af0] text-xs')
 
     def show_macros_dialog():
         """Show macros management dialog."""
         dialog = ui.dialog()
-        with dialog, ui.card().classes('p-4 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+        with dialog, ui.card().classes('p-4 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
             with ui.row().classes('w-full items-center justify-between mb-3'):
                 ui.label('Macros').classes('text-white font-medium')
-                ui.button('+ New', on_click=lambda: show_create_macro_dialog()).classes('bg-[#5e6ad2] text-white px-2 py-0.5 text-xs rounded')
+                ui.button('+ New', on_click=lambda: show_create_macro_dialog()).classes('bg-[#5c6fd0] text-white px-3 py-1 text-xs rounded-lg font-medium')
 
             if not macros:
-                ui.label('No macros defined').classes('text-[#62666d] text-sm py-4')
+                ui.label('No macros defined yet').classes('text-[#52525b] text-sm py-6')
             else:
-                with ui.column().classes('w-full gap-1'):
+                with ui.column().classes('w-full gap-0.5'):
                     for i, macro in enumerate(macros):
-                        with ui.row().classes('w-full items-center gap-2 p-2 rounded').style('background: rgba(255,255,255,0.01)'):
-                            ui.label(macro['name']).classes('text-[#d0d6e0] text-sm flex-1')
+                        with ui.row().classes('w-full items-center gap-3 px-3 py-2 rounded-lg').style('background: rgba(255,255,255,0.02)'):
+                            ui.label(macro['name']).classes('text-[#e4e4e7] text-sm font-medium flex-1')
                             cmd_count = len(macro['commands'])
-                            ui.label(f"{cmd_count} cmds").classes('text-[#62666d] text-xs')
-                            ui.button('▶ Run', on_click=lambda m=macro: run_macro(m)).classes('bg-[#27a644] text-white px-2 py-0.5 text-xs rounded')
-                            ui.button('✕', on_click=lambda idx=i: delete_macro(idx)).classes('text-[#e5484d] text-xs px-1')
+                            ui.label(f"{cmd_count} commands").classes('text-[#52525b] text-xs')
+                            ui.button('▶ Run', on_click=lambda m=macro: run_macro(m)).classes('bg-[#22c55e] text-white px-2 py-0.5 text-xs rounded')
+                            ui.button('x', on_click=lambda idx=i: delete_macro(idx)).classes('text-[#ef4444] text-xs px-2 py-1 rounded hover:bg-[rgba(239,68,68,0.1)]')
 
     def show_create_macro_dialog():
         """Dialog to create a new macro."""
         macro_dialog = ui.dialog()
-        with macro_dialog, ui.card().classes('p-4 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+        with macro_dialog, ui.card().classes('p-4 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
             ui.label('New Macro').classes('text-white font-medium mb-3')
-            name_input = ui.input('Name', value='My Macro').classes('w-full mb-2').props('outlined').style('color: #d0d6e0')
-            cmds_input = ui.textarea('Commands (one per line)', value='AT\r\nAT+STATUS').classes('w-full mb-3').props('outlined').style('color: #d0d6e0; font-family: monospace')
+            name_input = ui.input('Name', value='My Macro').classes('w-full mb-2').props('outlined').style('color: #e4e4e7')
+            cmds_input = ui.textarea('Commands (one per line)', value='AT\r\nAT+STATUS').classes('w-full mb-3').props('outlined').style('color: #e4e4e7; font-family: monospace')
             with ui.row().classes('gap-2 justify-end w-full'):
-                ui.button('Cancel', on_click=macro_dialog.close).props('flat').classes('text-[#8a8f98]')
-                ui.button('Create', on_click=lambda: create_macro(name_input.value, cmds_input.value, macro_dialog)).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
+                ui.button('Cancel', on_click=macro_dialog.close).props('flat').classes('text-[#71717a]')
+                ui.button('Create', on_click=lambda: create_macro(name_input.value, cmds_input.value, macro_dialog)).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
 
     def create_macro(name, commands_text, dialog):
         """Create a new macro."""
@@ -350,24 +350,24 @@ def terminal_page():
     cmd_input.on('keydown.enter', lambda: send_command())
 
     # Search & Filter bar
-    with ui.row().classes('w-full gap-2 items-center'):
-            search_input = ui.input('Search (Ctrl+F)', placeholder='Type to search...').classes('flex-1').props('outlined dense').style('color: #d0d6e0; font-family: JetBrains Mono, monospace; font-size: 12px')
+    with ui.row().classes('w-full gap-2 items-center p-3').style('background: #16181d; border-radius: 8px'):
+            search_input = ui.input('Search (Ctrl+F)', placeholder='Type to search...').classes('flex-1').props('outlined dense').style('color: #e4e4e7; font-family: JetBrains Mono, monospace; font-size: 12px')
             search_input.bind_value(terminal_state, 'search')
-            case_toggle = ui.checkbox('Case sensitive').classes('text-[#8a8f98] text-xs').bind_value(terminal_state, 'case_sensitive')
-            regex_toggle = ui.checkbox('Regex').classes('text-[#8a8f98] text-xs').bind_value(terminal_state, 'regex')
+            case_toggle = ui.checkbox('Case sensitive').classes('text-[#71717a] text-xs').bind_value(terminal_state, 'case_sensitive')
+            regex_toggle = ui.checkbox('Regex').classes('text-[#71717a] text-xs').bind_value(terminal_state, 'regex')
             level_select = ui.select(['all', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'metric', 'json'], value='all', label='Filter').classes('w-24').props('outlined dense').bind_value(terminal_state, 'filter_level')
             metric_input = ui.input('Metric', placeholder='e.g. TEMP').classes('w-28').props('outlined dense').bind_value(terminal_state, 'filter_metric')
 
     # Match navigation bar
-    with ui.row().classes('w-full gap-2 items-center'):
-        match_label = ui.label('No matches').classes('text-[#62666d] text-xs flex-1')
-        ui.button('◀', on_click=lambda: navigate_match(-1)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
-        ui.button('▶', on_click=lambda: navigate_match(1)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
-        ui.button('Clear', on_click=lambda: clear_search()).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
+    with ui.row().classes('w-full gap-2 items-center p-3').style('background: #16181d; border-radius: 8px'):
+        match_label = ui.label('No matches').classes('text-[#52525b] text-xs flex-1')
+        ui.button('◀', on_click=lambda: navigate_match(-1)).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-2 py-0.5 text-xs rounded')
+        ui.button('▶', on_click=lambda: navigate_match(1)).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-2 py-0.5 text-xs rounded')
+        ui.button('Clear', on_click=lambda: clear_search()).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-2 py-0.5 text-xs rounded')
 
     # Log area
     log_area = ui.column().classes('w-full gap-0 overflow-y-auto') \
-        .style('max-height: 55vh; background: #0f1011; padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); font-family: JetBrains Mono, monospace; font-size: 13px; width: 100%')
+        .style('max-height: 55vh; background: #0d0f12; padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); font-family: JetBrains Mono, monospace; font-size: 13px; width: 100%')
 
     def _apply_search_filter():
         """Apply search and filter to all stored lines, re-render log area."""
@@ -438,15 +438,15 @@ def terminal_page():
             for idx, (orig_i, ts, line, line_type, is_match) in enumerate(matches):
                 # Color based on line type
                 if line_type == 'error':
-                    color = '#e5484d'
+                    color = '#ef4444'
                 elif line_type == 'warn':
-                    color = '#f5a623'
+                    color = '#eab308'
                 elif line_type == 'metric':
-                    color = '#7170ff'
+                    color = '#5c8af0'
                 elif line_type == 'json':
-                    color = '#27a644'
+                    color = '#22c55e'
                 else:
-                    color = '#d0d6e0'
+                    color = '#e4e4e7'
 
                 # Highlight search matches
                 bg_style = 'background: rgba(113,112,255,0.2); border-radius: 2px;' if is_match and search else ''
@@ -522,11 +522,11 @@ def terminal_page():
 
 
 def charts_page():
-    """Live charts — telemetry visualization with custom dashboard builder."""
+    """Live charts - telemetry visualization with custom dashboard builder."""
     global selected_device
 
     if not selected_device:
-        ui.label('Select a device from Devices tab to view charts').classes('text-[#62666d]').style('padding: 40px')
+        ui.label('Select a device from Devices tab to view charts').classes('text-[#52525b]').style('padding: 40px')
         return
 
     # Dashboard state
@@ -536,23 +536,23 @@ def charts_page():
         'next_id': 1,
     }
 
-    with ui.column().classes('w-full gap-3'):
+    with ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto'):
         # Header with controls
-        with ui.row().classes('w-full items-center justify-between'):
+        with ui.row().classes('w-full items-center justify-between mb-3'):
             with ui.row().classes('items-center gap-3'):
-                ui.label(f"📊 Dashboard — {selected_device.name}").classes('text-[#d0d6e0] font-medium')
-                ui.button('⊞ Edit', on_click=lambda: toggle_edit()).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
-                ui.button('+ Add Widget', on_click=show_add_widget_dialog).classes('bg-[#5e6ad2] text-white px-3 py-1 text-sm rounded-md')
+                ui.label(f"📊 Dashboard - {selected_device.name}").classes('text-[#e4e4e7] font-medium')
+                ui.button('⊞ Edit', on_click=lambda: toggle_edit()).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
+                ui.button('+ Add Widget', on_click=show_add_widget_dialog).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
 
         # Available metrics info
         latest = telemetry_engine.get_latest_values(selected_device.id)
         if latest:
             with ui.row().classes('w-full gap-2 flex-wrap mb-2'):
                 for name, value in latest.items():
-                    ui.label(f"{name}: {value:.2f}").classes('text-[#62666d] text-xs font-mono bg-[rgba(255,255,255,0.02)] px-2 py-0.5 rounded')
+                    ui.label(f"{name}: {value:.2f}").classes('text-[#52525b] text-xs font-mono bg-[rgba(255,255,255,0.02)] px-2 py-0.5 rounded')
 
         # Dashboard grid
-        dashboard_container = ui.column().classes('w-full gap-3')
+        dashboard_container = ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto')
 
     def toggle_edit():
         dashboard_state['edit_mode'] = not dashboard_state['edit_mode']
@@ -560,22 +560,22 @@ def charts_page():
 
     def show_add_widget_dialog():
         dialog = ui.dialog()
-        with dialog, ui.card().classes('p-6 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+        with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
             ui.label('Add Widget').classes('text-white font-medium mb-4 text-lg')
-            type_select = ui.select(['Metric Card', 'Line Chart', 'Gauge', 'Alert Summary', 'Log Table'], value='Metric Card').classes('w-full mb-3').props('outlined').style('color: #d0d6e0')
-            title_input = ui.input('Title', value='').classes('w-full mb-3').props('outlined').style('color: #d0d6e0')
+            type_select = ui.select(['Metric Card', 'Line Chart', 'Gauge', 'Alert Summary', 'Log Table'], value='Metric Card').classes('w-full mb-3').props('outlined').style('color: #e4e4e7')
+            title_input = ui.input('Title', value='').classes('w-full mb-3').props('outlined').style('color: #e4e4e7')
             metric_select = ui.select(
                 list(latest.keys()) if latest else ['TEMP'],
                 value=list(latest.keys())[0] if latest else 'TEMP',
                 label='Metric'
-            ).classes('w-full mb-3').props('outlined').style('color: #d0d6e0')
-            size_select = ui.select(['Small', 'Medium', 'Large'], value='Medium').classes('w-full mb-4').props('outlined').style('color: #d0d6e0')
+            ).classes('w-full mb-3').props('outlined').style('color: #e4e4e7')
+            size_select = ui.select(['Small', 'Medium', 'Large'], value='Medium').classes('w-full mb-4').props('outlined').style('color: #e4e4e7')
             with ui.row().classes('gap-2 justify-end w-full'):
-                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#8a8f98]')
+                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
                 ui.button('Add', on_click=lambda: add_widget(
                     type_select.value, title_input.value or f"{metric_select.value}",
                     metric_select.value, size_select.value, dialog
-                )).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
+                )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
 
     def add_widget(widget_type, title, metric, size, dialog):
         widget = {
@@ -602,11 +602,11 @@ def charts_page():
 
         if not widgets:
             with dashboard_container:
-                with ui.card().classes('w-full p-8 text-center') \
+                with ui.card().classes('w-full p-12 text-center') \
                     .style('background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.1)'):
-                    ui.label('◇').classes('text-4xl text-[#23252a] mb-2')
-                    ui.label('No widgets yet').classes('text-[#d0d6e0] font-medium')
-                    ui.label('Click "+ Add Widget" to build your dashboard').classes('text-[#62666d] text-sm')
+                    ui.label('◇').classes('text-4xl text-[#5c8af0] mb-2')
+                    ui.label('No widgets yet').classes('text-[#e4e4e7] font-medium')
+                    ui.label('Click "+ Add Widget" to build your dashboard').classes('text-[#52525b] text-sm')
             return
 
         # Render grid
@@ -623,18 +623,18 @@ def charts_page():
         size_class = size_classes.get(widget['size'], 'flex-1')
 
         with ui.card().classes(f'p-4 {size_class}') \
-            .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+            .style('background: #16181d; border-left: 2px solid #5c8af0'):
             with ui.row().classes('w-full items-center justify-between mb-2'):
                 ui.label(widget['title']).classes('text-white font-medium text-sm')
                 if dashboard_state['edit_mode']:
-                    ui.button('✕', on_click=lambda w=widget: remove_widget(w['id'])).classes('text-[#e5484d] text-xs px-1')
+                    ui.button('✕', on_click=lambda w=widget: remove_widget(w['id'])).classes('text-[#ef4444] text-xs px-1')
 
             # Metric Card
             if widget['type'] == 'Metric Card':
                 latest = telemetry_engine.get_latest_values(selected_device.id)
                 val = latest.get(widget['metric'], 0)
                 ui.label(f"{val:.2f}").classes('text-2xl font-medium text-white font-mono')
-                ui.label(widget['metric']).classes('text-[#8a8f98] text-xs uppercase tracking-wider')
+                ui.label(widget['metric']).classes('text-[#71717a] text-xs uppercase tracking-wider')
 
             # Gauge
             elif widget['type'] == 'Gauge':
@@ -645,8 +645,8 @@ def charts_page():
                 filled = int(pct / 5)
                 empty = 20 - filled
                 ui.label(f"{val:.1f}").classes('text-xl font-medium text-white font-mono')
-                ui.label('█' * filled + '░' * empty).classes('text-[#7170ff] text-xs font-mono')
-                ui.label(widget['metric']).classes('text-[#8a8f98] text-[10px] uppercase')
+                ui.label('█' * filled + '░' * empty).classes('text-[#5c8af0] text-xs font-mono')
+                ui.label(widget['metric']).classes('text-[#71717a] text-[10px] uppercase')
 
             # Line Chart (text-based sparkline)
             elif widget['type'] == 'Line Chart':
@@ -660,26 +660,26 @@ def charts_page():
                     for v in chart_vals:
                         height = int(((v - min_v) / range_v) * 8) if range_v > 0 else 4
                         bars.append(' ▁▂▃▄▅▆▇█'[min(height, 8)])
-                    ui.label(''.join(bars)).classes('text-[#27a644] text-lg font-mono leading-none')
-                    ui.label(f"{history[-1]:.2f} ({min_v:.1f}-{max_v:.1f})").classes('text-[#8a8f98] text-xs font-mono')
+                    ui.label(''.join(bars)).classes('text-[#22c55e] text-lg font-mono leading-none')
+                    ui.label(f"{history[-1]:.2f} ({min_v:.1f}-{max_v:.1f})").classes('text-[#71717a] text-xs font-mono')
                 else:
-                    ui.label('Collecting data...').classes('text-[#62666d] text-sm')
-                ui.label(widget['metric']).classes('text-[#8a8f98] text-[10px] uppercase')
+                    ui.label('Collecting data...').classes('text-[#52525b] text-sm')
+                ui.label(widget['metric']).classes('text-[#71717a] text-[10px] uppercase')
 
             # Alert Summary
             elif widget['type'] == 'Alert Summary':
                 events = alert_engine.get_alert_history()
                 unack = len([a for a in events if not a.get('acknowledged')])
                 with ui.row().classes('items-center gap-2'):
-                    alert_color = '#e5484d' if unack > 0 else '#27a644'
+                    alert_color = '#ef4444' if unack > 0 else '#22c55e'
                     ui.label(str(unack)).classes('text-xl font-medium').style(f'color: {alert_color}')
-                    ui.label('unacked alerts').classes('text-[#8a8f98] text-xs')
+                    ui.label('unacked alerts').classes('text-[#71717a] text-xs')
 
             # Log Table
             elif widget['type'] == 'Log Table':
                 with ui.column().classes('w-full gap-0.5 max-h-32 overflow-y-auto'):
                     for ts, line, ltype in terminal_state.get('lines', [])[-5:]:
-                        color = {'error': '#e5484d', 'warn': '#f5a623', 'metric': '#7170ff', 'json': '#27a644'}.get(ltype, '#d0d6e0')
+                        color = {'error': '#ef4444', 'warn': '#eab308', 'metric': '#5c8af0', 'json': '#22c55e'}.get(ltype, '#e4e4e7')
                         ui.label(f"[{ts}] {line[:50]}").classes('text-xs font-mono').style(f'color: {color}')
 
     # Background update loop
@@ -700,7 +700,7 @@ def charts_page():
 
 
 def alerts_page():
-    """Alert management — rules, history, acknowledgment."""
+    """Alert management - rules, history, acknowledgment."""
     def refresh_alerts():
         rules = get_alert_rules()
         events = get_alert_events()
@@ -713,78 +713,78 @@ def alerts_page():
             by_sev[s] = by_sev.get(s, 0) + 1
         with ui.row().classes('w-full gap-3 mb-4'):
             for label, val, color in [
-                ('Unacknowledged', unack, '#e5484d'),
+                ('Unacknowledged', unack, '#ef4444'),
                 ('Total Alerts', len(events), '#f7f8f8'),
-                ('Critical', by_sev.get('critical', 0), '#e5484d'),
-                ('Warning', by_sev.get('warning', 0), '#f5a623'),
-                ('Active Rules', len(rules), '#7170ff'),
+                ('Critical', by_sev.get('critical', 0), '#ef4444'),
+                ('Warning', by_sev.get('warning', 0), '#eab308'),
+                ('Active Rules', len(rules), '#5c8af0'),
             ]:
-                with ui.card().classes('flex-1 p-3') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                with ui.card().classes('flex-1 p-4') \
+                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label(str(val)).classes('text-xl font-medium').style(f'color: {color}')
-                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
 
         # Rules
-        with ui.card().classes('w-full p-4 mb-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+        with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
             with ui.row().classes('w-full items-center justify-between mb-3'):
                 ui.label('Alert Rules').classes('text-white font-medium')
-                ui.button('+ New Rule', on_click=show_add_rule_dialog).classes('bg-[#5e6ad2] text-white px-3 py-1 text-sm rounded-md')
+                ui.button('+ New Rule', on_click=show_add_rule_dialog).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
 
             if not rules:
-                ui.label('No alert rules configured').classes('text-[#62666d] text-sm py-4')
+                ui.label('No alert rules configured').classes('text-[#52525b] text-sm py-4')
             else:
-                with ui.column().classes('w-full gap-2'):
+                with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
                     for rule in rules:
-                        with ui.row().classes('w-full items-center justify-between p-2 rounded-md').style('background: rgba(255,255,255,0.01)'):
+                        with ui.row().classes('w-full items-center justify-between p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
                             with ui.row().classes('items-center gap-3'):
                                 sev = severity_color(rule.severity or 'warning')
                                 ui.label('●').style(f'color: {sev}').classes('text-xs')
                                 with ui.column().classes('gap-0'):
-                                    ui.label(rule.name).classes('text-[#d0d6e0] text-sm font-medium')
-                                    ui.label(f"{rule.metric_name} {rule.condition} {rule.threshold}").classes('text-[#62666d] text-xs font-mono')
-                            with ui.row().classes('gap-2'):
-                                ui.label(f"{rule.cooldown}s").classes('text-[#62666d] text-xs')
-                                ui.button('Delete', on_click=lambda r=rule: delete_rule(r)).classes('bg-[rgba(229,72,77,0.1)] text-[#e5484d] px-2 py-0.5 text-xs rounded')
+                                    ui.label(rule.name).classes('text-[#e4e4e7] text-sm font-medium')
+                                    ui.label(f"{rule.metric_name} {rule.condition} {rule.threshold}").classes('text-[#52525b] text-xs font-mono')
+                            with ui.row().classes('gap-2 mt-1'):
+                                ui.label(f"{rule.cooldown}s").classes('text-[#52525b] text-xs')
+                                ui.button('Delete', on_click=lambda r=rule: delete_rule(r)).classes('bg-[rgba(229,72,77,0.1)] text-[#ef4444] px-2 py-0.5 text-xs rounded')
 
         # Alert history
-        with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+        with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
             with ui.row().classes('w-full items-center justify-between mb-3'):
                 ui.label('Recent Alerts').classes('text-white font-medium')
                 if events:
-                    ui.button('Ack All', on_click=ack_all).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
+                    ui.button('Ack All', on_click=ack_all).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
 
             if not events:
-                ui.label('No alerts yet').classes('text-[#62666d] text-sm py-4')
+                ui.label('No alerts yet').classes('text-[#52525b] text-sm py-4')
             else:
                 with ui.column().classes('w-full gap-1 max-h-72 overflow-y-auto'):
                     for alert in reversed(events[-20:]):
                         acked = alert.get('acknowledged', False)
-                        with ui.row().classes(f'w-full items-center gap-2 p-2 rounded-md {"opacity-50" if acked else ""}').style('background: rgba(255,255,255,0.01)'):
+                        with ui.row().classes(f'w-full items-center gap-2 p-2 rounded-lg {"opacity-50" if acked else ""}').style('background: rgba(255,255,255,0.01)'):
                             sev = severity_color(alert.get('severity', 'warning'))
                             ui.label('●').style(f'color: {sev}').classes('text-xs')
-                            ui.label(alert.get('timestamp', '')[:19]).classes('text-[#62666d] text-xs font-mono')
-                            ui.label(alert.get('message', '')).classes(f'text-[#d0d6e0] text-sm flex-1 {"line-through" if acked else ""}')
+                            ui.label(alert.get('timestamp', '')[:19]).classes('text-[#52525b] text-xs font-mono')
+                            ui.label(alert.get('message', '')).classes(f'text-[#e4e4e7] text-sm flex-1 {"line-through" if acked else ""}')
                             if not acked:
-                                ui.button('✓ Ack', on_click=lambda a=alert: ack_alert(a)).classes('bg-[rgba(113,112,255,0.1)] text-[#7170ff] px-2 py-0.5 text-xs rounded font-medium')
+                                ui.button('✓ Ack', on_click=lambda a=alert: ack_alert(a)).classes('bg-[rgba(113,112,255,0.1)] text-[#5c8af0] px-2 py-0.5 text-xs rounded font-medium')
                             else:
-                                ui.label('✓ Acked').classes('text-[#27a644] text-xs')
+                                ui.label('✓ Acked').classes('text-[#22c55e] text-xs')
 
     def show_add_rule_dialog():
         dialog = ui.dialog()
-        with dialog, ui.card().classes('p-6 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+        with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
             ui.label('New Alert Rule').classes('text-white font-medium mb-4 text-lg')
-            name = ui.input('Name', value='High Temperature').classes('mb-3 w-full').props('outlined').style('color: #d0d6e0')
-            metric = ui.input('Metric', value='TEMP').classes('mb-3 w-full').props('outlined').style('color: #d0d6e0')
-            condition = ui.select(['gt', 'lt', 'eq', 'range', 'change'], value='gt').classes('mb-1 w-full').props('outlined').style('color: #d0d6e0')
-            ui.label('gt=greater than, lt=less than, eq=equals, range=outside range, change=delta exceeds threshold').classes('text-[#62666d] text-[10px] mb-3 ml-1')
+            name = ui.input('Name', value='High Temperature').classes('mb-3 w-full').props('outlined').style('color: #e4e4e7')
+            metric = ui.input('Metric', value='TEMP').classes('mb-3 w-full').props('outlined').style('color: #e4e4e7')
+            condition = ui.select(['gt', 'lt', 'eq', 'range', 'change'], value='gt').classes('mb-1 w-full').props('outlined').style('color: #e4e4e7')
+            ui.label('gt=greater than, lt=less than, eq=equals, range=outside range, change=delta exceeds threshold').classes('text-[#52525b] text-[10px] mb-3 ml-1')
             threshold_label = 'Min Δ (delta)' if condition.value == 'change' else 'Threshold'
-            threshold = ui.number(threshold_label, value=30).classes('mb-3 w-full').props('outlined').style('color: #d0d6e0')
-            cooldown = ui.number('Cooldown (s)', value=60).classes('mb-4 w-full').props('outlined').style('color: #d0d6e0')
+            threshold = ui.number(threshold_label, value=30).classes('mb-3 w-full').props('outlined').style('color: #e4e4e7')
+            cooldown = ui.number('Cooldown (s)', value=60).classes('mb-4 w-full').props('outlined').style('color: #e4e4e7')
             with ui.row().classes('gap-2 justify-end w-full'):
-                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#8a8f98]')
+                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
                 ui.button('Create', on_click=lambda: create_rule(
                     name.value, metric.value, condition.value, threshold.value, cooldown.value, dialog
-                )).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
+                )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
 
     async def create_rule(name, metric, condition, threshold, cooldown, dialog):
         rule = AlertRule(
@@ -841,34 +841,34 @@ def sessions_page():
         with ui.row().classes('w-full gap-3 mb-4'):
             recording = len([s for s in sessions if s.get('status') == 'recording'])
             for label, val in [('Recording', recording), ('Total', len(sessions))]:
-                with ui.card().classes('flex-1 p-3') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                with ui.card().classes('flex-1 p-4') \
+                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label(str(val)).classes('text-xl font-medium text-white')
-                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
 
         if not sessions:
-            with ui.card().classes('w-full p-8 text-center') \
-                .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
-                ui.label('⟳').classes('text-4xl text-[#23252a] mb-2')
-                ui.label('No sessions yet').classes('text-[#d0d6e0] font-medium')
-                ui.label('Start streaming to create sessions').classes('text-[#62666d] text-sm')
+            with ui.card().classes('w-full p-12 text-center') \
+                .style('background: #16181d; border-left: 2px solid #5c8af0'):
+                ui.label('⟳').classes('text-4xl text-[#5c8af0] mb-2')
+                ui.label('No sessions yet').classes('text-[#e4e4e7] font-medium')
+                ui.label('Start streaming to create sessions').classes('text-[#52525b] text-sm')
         else:
-            with ui.column().classes('w-full gap-2'):
+            with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
                 for session in reversed(sessions):
                     with ui.card().classes('w-full p-4 cursor-pointer hover:border-[rgba(255,255,255,0.12)]') \
-                        .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)') \
+                        .style('background: #16181d; border-left: 2px solid #5c8af0') \
                         .on('click', lambda s=session: open_session(s)):
-                        with ui.row().classes('w-full items-center justify-between'):
+                        with ui.row().classes('w-full items-center justify-between mb-3'):
                             with ui.row().classes('items-center gap-3'):
                                 is_live = session.get('status') == 'recording'
-                                ui.label('●').classes('text-xs').style(f'color: {"#27a644" if is_live else "#62666d"}')
+                                ui.label('●').classes('text-xs').style(f'color: {"#22c55e" if is_live else "#52525b"}')
                                 with ui.column().classes('gap-0.5'):
                                     ui.label(session.get('name', 'Unnamed')).classes('text-white font-medium text-sm')
-                                    ui.label(f"{session.get('packet_count', 0)} pkts · {session.get('metric_count', 0)} metrics").classes('text-[#62666d] text-xs font-mono')
+                                    ui.label(f"{session.get('packet_count', 0)} pkts · {session.get('metric_count', 0)} metrics").classes('text-[#52525b] text-xs font-mono')
                             with ui.row().classes('items-center gap-2'):
                                 if is_live:
-                                    ui.label('● LIVE').classes('text-[#27a644] text-xs font-medium')
-                                ui.label(format_duration(session.get('started_at', ''), session.get('ended_at'))).classes('text-[#8a8f98] text-xs font-mono')
+                                    ui.label('● LIVE').classes('text-[#22c55e] text-xs font-medium')
+                                ui.label(format_duration(session.get('started_at', ''), session.get('ended_at'))).classes('text-[#71717a] text-xs font-mono')
 
     def open_session(session):
         global selected_session, current_tab
@@ -884,17 +884,17 @@ def session_detail_page():
     global selected_session
 
     if not selected_session:
-        ui.label('No session selected').classes('text-[#62666d]').style('padding: 40px')
+        ui.label('No session selected').classes('text-[#52525b]').style('padding: 40px')
         return
 
     session = selected_session
 
     with ui.column().classes('w-full gap-4'):
         with ui.row().classes('w-full items-center gap-3'):
-            ui.button('← Back', on_click=go_back).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
+            ui.button('← Back', on_click=go_back).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
             with ui.column():
                 ui.label(session.get('name', 'Unnamed')).classes('text-white font-medium')
-                ui.label(f"{session.get('packet_count', 0)} packets").classes('text-[#62666d] text-xs')
+                ui.label(f"{session.get('packet_count', 0)} packets").classes('text-[#52525b] text-xs')
 
         # Tabs
         tabs = ui.tabs().classes('w-full')
@@ -906,26 +906,26 @@ def session_detail_page():
 
         with ui.tab_panels(tabs, value=t1).classes('w-full p-0'):
             with ui.tab_panel(t1):
-                with ui.column().classes('w-full gap-3'):
+                with ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto'):
                     with ui.row().classes('w-full items-center gap-3'):
-                        ui.button('▶ Replay', on_click=start_replay).classes('bg-[#5e6ad2] text-white px-3 py-1 text-sm rounded-md')
-                        ui.select([0.5, 1, 2, 5, 10], value=1).classes('bg-[rgba(255,255,255,0.02)] text-[#d0d6e0] border border-[rgba(255,255,255,0.08)] px-2 py-1 text-sm rounded-md')
-                        ui.label(f"0 packets").classes('text-[#8a8f98] text-xs font-mono')
+                        ui.button('▶ Replay', on_click=start_replay).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+                        ui.select([0.5, 1, 2, 5, 10], value=1).classes('bg-[rgba(255,255,255,0.02)] text-[#e4e4e7] border border-[rgba(255,255,255,0.10)] px-2 py-1 text-sm rounded-lg')
+                        ui.label(f"0 packets").classes('text-[#71717a] text-xs font-mono')
 
-                    ui.label('Timeline replay coming soon').classes('text-[#62666d] text-sm py-4')
+                    ui.label('Timeline replay coming soon').classes('text-[#52525b] text-sm py-4')
 
             with ui.tab_panel(t2):
-                ui.label('Metrics chart coming soon').classes('text-[#62666d] py-8')
+                ui.label('Metrics chart coming soon').classes('text-[#52525b] py-8')
 
             with ui.tab_panel(t3):
-                with ui.column().classes('w-full gap-3'):
+                with ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto'):
                     ui.label('Export & Share').classes('text-white font-medium')
                     with ui.row().classes('w-full gap-2'):
-                        ui.button('Export JSON', on_click=lambda: export_json()).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md flex-1')
-                        ui.button('Export CSV', on_click=lambda: export_csv()).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-4 py-2 rounded-md flex-1')
-                    ui.button('📦 Share Bundle (.uartscope)', on_click=lambda: export_bundle()).classes('bg-[#7170ff] text-white px-4 py-2 rounded-md w-full')
+                        ui.button('Export JSON', on_click=lambda: export_json()).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg flex-1')
+                        ui.button('Export CSV', on_click=lambda: export_csv()).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-4 py-2 rounded-lg flex-1')
+                    ui.button('📦 Share Bundle (.uartscope)', on_click=lambda: export_bundle()).classes('bg-[#5c8af0] text-white px-4 py-2 rounded-lg w-full')
 
-                    ui.label('Sharing exports session metadata + metrics. Does NOT include raw serial data. Others can open the bundle to view the session.').classes('text-[#62666d] text-[10px]')
+                    ui.label('Sharing exports session metadata + metrics. Does NOT include raw serial data. Others can open the bundle to view the session.').classes('text-[#52525b] text-[10px]')
 
             def export_json():
                 filename = f"session_{session.get('session_id', 'unknown')[:8]}.json"
@@ -979,25 +979,25 @@ def session_detail_page():
                 # Golden Session Diff Tab
                 with ui.column().classes('w-full gap-4'):
                     ui.label('Automated Session Diff').classes('text-white font-medium')
-                    ui.label('Mark this session as "golden" (expected behavior), then compare new sessions against it. Perfect for CI pipelines.').classes('text-[#8a8f98] text-xs')
+                    ui.label('Mark this session as "golden" (expected behavior), then compare new sessions against it. Perfect for CI pipelines.').classes('text-[#71717a] text-xs')
 
                     with ui.row().classes('w-full gap-3 items-center'):
-                        golden_status = ui.label('⚪ No golden session set').classes('text-[#62666d] text-sm flex-1')
-                        ui.button('⭐ Mark as Golden', on_click=lambda: mark_as_golden()).classes('bg-[#f5a623] text-white px-3 py-1.5 text-sm rounded-md')
+                        golden_status = ui.label('⚪ No golden session set').classes('text-[#52525b] text-sm flex-1')
+                        ui.button('⭐ Mark as Golden', on_click=lambda: mark_as_golden()).classes('bg-[#eab308] text-white px-3 py-1.5 text-sm rounded-lg')
 
                     # Diff criteria
-                    with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                    with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
                         ui.label('Diff Criteria').classes('text-white font-medium text-sm mb-2')
-                        check_metrics = ui.checkbox('Compare metric values', value=True).classes('text-[#8a8f98] text-xs')
-                        check_packet_count = ui.checkbox('Compare packet counts', value=True).classes('text-[#8a8f98] text-xs')
-                        check_errors = ui.checkbox('Compare error patterns', value=True).classes('text-[#8a8f98] text-xs')
-                        tolerance = ui.number('Tolerance (%)', value=5, min=0, max=100).classes('w-full mb-2').props('outlined dense').style('color: #d0d6e0')
+                        check_metrics = ui.checkbox('Compare metric values', value=True).classes('text-[#71717a] text-xs')
+                        check_packet_count = ui.checkbox('Compare packet counts', value=True).classes('text-[#71717a] text-xs')
+                        check_errors = ui.checkbox('Compare error patterns', value=True).classes('text-[#71717a] text-xs')
+                        tolerance = ui.number('Tolerance (%)', value=5, min=0, max=100).classes('w-full mb-2').props('outlined dense').style('color: #e4e4e7')
 
                     # Compare button
-                    ui.button('🧪 Run Diff Against Golden', on_click=lambda: run_diff()).classes('bg-[#7170ff] text-white px-4 py-2 rounded-md w-full')
+                    ui.button('🧪 Run Diff Against Golden', on_click=lambda: run_diff()).classes('bg-[#5c8af0] text-white px-4 py-2 rounded-lg w-full')
 
                     # Diff results area
-                    diff_results = ui.column().classes('w-full gap-2')
+                    diff_results = ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto')
 
         # Diff functions (defined in outer scope)
         current_packets = session.get('packet_count', 0)
@@ -1073,19 +1073,19 @@ def session_detail_page():
             with diff_results:
                 if passed:
                     with ui.card().classes('w-full p-3').style('background: rgba(39,166,68,0.1); border: 1px solid rgba(39,166,68,0.3)'):
-                        ui.label('✅ ALL CHECKS PASSED').classes('text-[#27a644] font-medium')
+                        ui.label('✅ ALL CHECKS PASSED').classes('text-[#22c55e] font-medium')
                 else:
                     with ui.card().classes('w-full p-3').style('background: rgba(229,72,77,0.1); border: 1px solid rgba(229,72,77,0.3)'):
-                        ui.label('❌ TEST FAILED').classes('text-[#e5484d] font-medium')
+                        ui.label('❌ TEST FAILED').classes('text-[#ef4444] font-medium')
 
                 for r in results:
-                    color = '#27a644' if r['pass'] else '#e5484d'
+                    color = '#22c55e' if r['pass'] else '#ef4444'
                     icon = '✓' if r['pass'] else '✗'
-                    with ui.row().classes('w-full items-center gap-3 p-2 rounded-md').style('background: rgba(255,255,255,0.01)'):
+                    with ui.row().classes('w-full items-center gap-3 p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
                         ui.label(icon).style(f'color: {color}').classes('text-sm')
-                        ui.label(r['name']).classes('text-[#d0d6e0] text-xs flex-1')
-                        ui.label(f"Expected: {r['expected']}").classes('text-[#8a8f98] text-xs font-mono')
-                        ui.label(f"Actual: {r['actual']}").classes('text-[#d0d6e0] text-xs font-mono')
+                        ui.label(r['name']).classes('text-[#e4e4e7] text-xs flex-1')
+                        ui.label(f"Expected: {r['expected']}").classes('text-[#71717a] text-xs font-mono')
+                        ui.label(f"Actual: {r['actual']}").classes('text-[#e4e4e7] text-xs font-mono')
                         ui.label(f"Δ {r['diff']}").style(f'color: {color}').classes('text-xs font-mono')
 
     def go_back():
@@ -1099,7 +1099,7 @@ def session_detail_page():
 
 
 def performance_page():
-    """Performance Analytics — packet rate, throughput, latency, errors, uptime."""
+    """Performance Analytics - packet rate, throughput, latency, errors, uptime."""
     def refresh_performance():
         summary = performance_tracker.get_summary()
         snapshot = performance_tracker.get_global_snapshot()
@@ -1108,16 +1108,16 @@ def performance_page():
         # Main stats row
         with ui.row().classes('w-full gap-3 mb-4'):
             for label, val, color in [
-                ('Current PPS', f"{snapshot.get('current_packet_rate', 0):.1f}", '#7170ff'),
-                ('Throughput', format_bytes(snapshot.get('current_throughput', 0)) + '/s', '#27a644'),
-                ('Avg Latency', f"{snapshot.get('avg_latency_ms', 0):.1f} ms", '#f5a623'),
-                ('Total Errors', str(summary.get('total_errors', 0)), '#e5484d'),
-                ('Error Rate', f"{summary.get('error_rate_per_min', 0):.1f}/min", '#e5484d'),
+                ('Current PPS', f"{snapshot.get('current_packet_rate', 0):.1f}", '#5c8af0'),
+                ('Throughput', format_bytes(snapshot.get('current_throughput', 0)) + '/s', '#22c55e'),
+                ('Avg Latency', f"{snapshot.get('avg_latency_ms', 0):.1f} ms", '#eab308'),
+                ('Total Errors', str(summary.get('total_errors', 0)), '#ef4444'),
+                ('Error Rate', f"{summary.get('error_rate_per_min', 0):.1f}/min", '#ef4444'),
             ]:
-                with ui.card().classes('flex-1 p-3') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                with ui.card().classes('flex-1 p-4') \
+                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label(str(val)).classes('text-lg font-medium font-mono').style(f'color: {color}')
-                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
 
         # Aggregate totals
         with ui.row().classes('w-full gap-3 mb-4'):
@@ -1128,22 +1128,22 @@ def performance_page():
                 ('Avg Throughput', format_bytes(summary.get('avg_throughput', 0)) + '/s'),
                 ('Uptime', format_duration(None, None, seconds=summary.get('total_uptime_seconds', 0))),
             ]:
-                with ui.card().classes('flex-1 p-3') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                with ui.card().classes('flex-1 p-4') \
+                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label(str(val)).classes('text-lg font-medium text-white font-mono')
-                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
 
         # Per-device performance table
-        with ui.card().classes('w-full p-4 mb-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+        with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
             ui.label('Per-Device Performance').classes('text-white font-medium mb-3')
 
             if not all_perf:
-                ui.label('No device data yet').classes('text-[#62666d] text-sm py-4')
+                ui.label('No device data yet').classes('text-[#52525b] text-sm py-4')
             else:
                 # Table
                 with ui.table({
                     'columns': [
-                        {'name': 'device', 'label': 'Device', 'field': 'name', 'align': 'left', 'classes': 'text-[#8a8f98] text-xs'},
+                        {'name': 'device', 'label': 'Device', 'field': 'name', 'align': 'left', 'classes': 'text-[#71717a] text-xs'},
                         {'name': 'status', 'label': 'Status', 'field': 'status', 'align': 'left'},
                         {'name': 'uptime', 'label': 'Uptime', 'field': 'uptime', 'align': 'right'},
                         {'name': 'packets', 'label': 'Packets', 'field': 'packets', 'align': 'right'},
@@ -1176,10 +1176,10 @@ def performance_page():
                     perf_table.props('separator=cell')
 
         # Latency sparkline (text-based mini chart)
-        with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+        with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
             with ui.row().classes('w-full items-center justify-between mb-3'):
                 ui.label('Latency Distribution (last 100 samples)').classes('text-white font-medium')
-                ui.label(f"Avg: {summary.get('avg_latency_ms', 0):.1f}ms").classes('text-[#62666d] text-xs font-mono')
+                ui.label(f"Avg: {summary.get('avg_latency_ms', 0):.1f}ms").classes('text-[#52525b] text-xs font-mono')
 
             # Collect all latency samples
             all_latencies = []
@@ -1203,11 +1203,11 @@ def performance_page():
                         height_pct = (count / max_bucket) * 100 if max_bucket > 0 else 0
                         label_text = f"{lat_min + i * bucket_width:.0f}"
                         with ui.column().classes('flex-1 items-center gap-0.5'):
-                            ui.label(str(count)).classes('text-[#62666d] text-[9px] font-mono').style('height: 12px')
-                            ui.label('█').classes('text-[#7170ff]').style(f'font-size: {max(8, height_pct * 0.6):.0f}px; line-height: 1')
-                            ui.label(label_text).classes('text-[#62666d] text-[8px] font-mono')
+                            ui.label(str(count)).classes('text-[#52525b] text-[9px] font-mono').style('height: 12px')
+                            ui.label('█').classes('text-[#5c8af0]').style(f'font-size: {max(8, height_pct * 0.6):.0f}px; line-height: 1')
+                            ui.label(label_text).classes('text-[#52525b] text-[8px] font-mono')
             else:
-                ui.label('No latency data yet').classes('text-[#62666d] text-sm py-4')
+                ui.label('No latency data yet').classes('text-[#52525b] text-sm py-4')
 
     def _fmt_uptime(seconds):
         if seconds < 60: return f"{seconds:.0f}s"
@@ -1225,7 +1225,7 @@ def performance_page():
 
 
 def mqtt_page():
-    """MQTT Integration — broker connections, subscriptions, message history."""
+    """MQTT Integration - broker connections, subscriptions, message history."""
     import time as _time
 
     def refresh_mqtt():
@@ -1236,100 +1236,100 @@ def mqtt_page():
         # Stats bar
         with ui.row().classes('w-full gap-3 mb-4'):
             for label, val, color in [
-                ('Connections', f"{stats.get('connected', 0)}/{stats.get('total_connections', 0)}", '#7170ff'),
-                ('Messages', str(stats.get('total_messages', 0)), '#27a644'),
-                ('Data', format_bytes(stats.get('total_bytes', 0)), '#f5a623'),
-                ('History', str(stats.get('history_size', 0)), '#8a8f98'),
+                ('Connections', f"{stats.get('connected', 0)}/{stats.get('total_connections', 0)}", '#5c8af0'),
+                ('Messages', str(stats.get('total_messages', 0)), '#22c55e'),
+                ('Data', format_bytes(stats.get('total_bytes', 0)), '#eab308'),
+                ('History', str(stats.get('history_size', 0)), '#71717a'),
             ]:
-                with ui.card().classes('flex-1 p-3') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                with ui.card().classes('flex-1 p-4') \
+                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label(str(val)).classes('text-lg font-medium font-mono').style(f'color: {color}')
-                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
 
         # Connection profiles
-        with ui.card().classes('w-full p-4 mb-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+        with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
             with ui.row().classes('w-full items-center justify-between mb-3'):
                 ui.label('Broker Connections').classes('text-white font-medium')
-                ui.button('+ Add Broker', on_click=show_add_broker_dialog).classes('bg-[#5e6ad2] text-white px-3 py-1 text-sm rounded-md')
+                ui.button('+ Add Broker', on_click=show_add_broker_dialog).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
 
             if not profiles:
-                ui.label('No MQTT connections configured').classes('text-[#62666d] text-sm py-4')
+                ui.label('No MQTT connections configured').classes('text-[#52525b] text-sm py-4')
             else:
-                with ui.column().classes('w-full gap-2'):
+                with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
                     for profile in profiles:
-                        with ui.card().classes('w-full p-3').style('background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.05)'):
-                            with ui.row().classes('w-full items-center justify-between'):
+                        with ui.card().classes('w-full p-3').style('background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.06)'):
+                            with ui.row().classes('w-full items-center justify-between mb-3'):
                                 with ui.row().classes('items-center gap-3'):
-                                    sc = '#27a644' if profile.connected else '#62666d'
-                                    ui.label('●').classes('text-xs').style(f'color: {sc}')
+                                    sc = '#22c55e' if profile.connected else '#52525b'
+                                    ui.label(' ').classes('inline-block w-2 h-2 rounded-full').style(f'background: {sc}')
                                     with ui.column().classes('gap-0.5'):
                                         ui.label(profile.name).classes('text-white font-medium text-sm')
-                                        ui.label(f"{profile.broker}:{profile.port}").classes('text-[#62666d] text-xs font-mono')
+                                        ui.label(f"{profile.broker}:{profile.port}").classes('text-[#52525b] text-xs font-mono')
                                 with ui.row().classes('items-center gap-2'):
-                                    ui.label(f"{profile.messages_received} msgs").classes('text-[#62666d] text-xs font-mono')
+                                    ui.label(f"{profile.messages_received} msgs").classes('text-[#52525b] text-xs font-mono')
                                     if profile.connected:
-                                        ui.button('Disconnect', on_click=lambda p=profile: disconnect_broker(p)).classes('bg-[#e5484d] text-white px-2 py-0.5 text-xs rounded')
+                                        ui.button('Disconnect', on_click=lambda p=profile: disconnect_broker(p)).classes('bg-[#ef4444] text-white px-2 py-0.5 text-xs rounded')
                                     else:
-                                        ui.button('Connect', on_click=lambda p=profile: connect_broker(p)).classes('bg-[#27a644] text-white px-2 py-0.5 text-xs rounded')
-                                    ui.button('Delete', on_click=lambda p=profile: delete_broker(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#e5484d] px-2 py-0.5 text-xs rounded')
+                                        ui.button('Connect', on_click=lambda p=profile: connect_broker(p)).classes('bg-[#22c55e] text-white px-2 py-0.5 text-xs rounded')
+                                    ui.button('Delete', on_click=lambda p=profile: delete_broker(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#ef4444] px-2 py-0.5 text-xs rounded')
 
         # Subscriptions + Publish panel
         if profiles:
             with ui.row().classes('w-full gap-3 mb-4'):
                 # Subscriptions
-                with ui.card().classes('flex-1 p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                with ui.card().classes('flex-1 p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label('Subscriptions').classes('text-white font-medium mb-2')
-                    with ui.column().classes('w-full gap-1'):
+                    with ui.column().classes('w-full gap-0.5'):
                         for profile in profiles:
                             if profile.subscribed_topics:
                                 for topic in profile.subscribed_topics:
                                     with ui.row().classes('items-center gap-2 p-1.5 rounded').style('background: rgba(255,255,255,0.01)'):
                                         ui.label('📡').classes('text-xs')
-                                        ui.label(topic).classes('text-[#d0d6e0] text-xs font-mono flex-1')
-                                        ui.button('✕', on_click=lambda p=profile, t=topic: unsubscribe_topic(p, t)).classes('text-[#e5484d] text-xs px-1')
+                                        ui.label(topic).classes('text-[#e4e4e7] text-xs font-mono flex-1')
+                                        ui.button('✕', on_click=lambda p=profile, t=topic: unsubscribe_topic(p, t)).classes('text-[#ef4444] text-xs px-1')
 
                 # Publish panel
-                with ui.card().classes('flex-1 p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                with ui.card().classes('flex-1 p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label('Publish Message').classes('text-white font-medium mb-2')
                     pub_profile = ui.select(
                         {p.id: p.name for p in profiles if p.connected},
                         label='Connection',
                         value=profiles[0].id if profiles else None,
-                    ).classes('w-full mb-2').props('outlined').style('color: #d0d6e0')
-                    pub_topic = ui.input('Topic', value='command').classes('w-full mb-2').props('outlined').style('color: #d0d6e0')
-                    pub_payload = ui.textarea('Payload (JSON or text)', value='{"cmd": "status"}').classes('w-full mb-2').props('outlined').style('color: #d0d6e0; font-family: monospace')
-                    ui.button('Publish', on_click=lambda: do_publish(pub_profile.value, pub_topic.value, pub_payload.value)).classes('bg-[#5e6ad2] text-white px-4 py-1.5 text-sm rounded-md w-full')
+                    ).classes('w-full mb-2').props('outlined').style('color: #e4e4e7')
+                    pub_topic = ui.input('Topic', value='command').classes('w-full mb-2').props('outlined').style('color: #e4e4e7')
+                    pub_payload = ui.textarea('Payload (JSON or text)', value='{"cmd": "status"}').classes('w-full mb-2').props('outlined').style('color: #e4e4e7; font-family: monospace')
+                    ui.button('Publish', on_click=lambda: do_publish(pub_profile.value, pub_topic.value, pub_payload.value)).classes('bg-[#5c6fd0] text-white px-4 py-1.5 text-sm rounded-lg w-full')
 
         # Message history
-        with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+        with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
             ui.label('Message History (last 50)').classes('text-white font-medium mb-3')
             if not messages:
-                ui.label('No messages yet. Connect to an MQTT broker to receive data.').classes('text-[#62666d] text-sm py-4')
+                ui.label('No messages yet. Connect to an MQTT broker to receive data.').classes('text-[#52525b] text-sm py-4')
             else:
                 with ui.column().classes('w-full gap-1 max-h-72 overflow-y-auto'):
                     for msg in reversed(messages):
-                        with ui.row().classes('w-full items-start gap-2 p-2 rounded-md').style('background: rgba(255,255,255,0.01)'):
-                            ui.label(msg.timestamp.strftime('%H:%M:%S')).classes('text-[#62666d] text-xs font-mono')
-                            ui.label(msg.topic).classes('text-[#7170ff] text-xs font-mono min-w-32')
-                            ui.label(msg.payload[:80]).classes('text-[#d0d6e0] text-xs flex-1 font-mono')
+                        with ui.row().classes('w-full items-start gap-2 p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
+                            ui.label(msg.timestamp.strftime('%H:%M:%S')).classes('text-[#52525b] text-xs font-mono')
+                            ui.label(msg.topic).classes('text-[#5c8af0] text-xs font-mono min-w-32')
+                            ui.label(msg.payload[:80]).classes('text-[#e4e4e7] text-xs flex-1 font-mono')
 
     # Actions
     def show_add_broker_dialog():
         dialog = ui.dialog()
-        with dialog, ui.card().classes('p-6 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+        with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
             ui.label('Add MQTT Broker').classes('text-white font-medium mb-4 text-lg')
-            name = ui.input('Name', value='My Broker').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
-            broker = ui.input('Broker Host', value='broker.hivemq.com').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
-            port = ui.number('Port', value=1883).classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
-            topic_prefix = ui.input('Topic Prefix', value='uartscope').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
-            username = ui.input('Username (optional)').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
-            password = ui.input('Password (optional)').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
+            name = ui.input('Name', value='My Broker').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
+            broker = ui.input('Broker Host', value='broker.hivemq.com').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
+            port = ui.number('Port', value=1883).classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
+            topic_prefix = ui.input('Topic Prefix', value='uartscope').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
+            username = ui.input('Username (optional)').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
+            password = ui.input('Password (optional)').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
             with ui.row().classes('gap-2 justify-end w-full mt-4'):
-                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#8a8f98]')
+                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
                 ui.button('Add', on_click=lambda: create_broker(
                     name.value, broker.value, int(port.value), topic_prefix.value,
                     username.value or None, password.value or None, dialog
-                )).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
+                )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
 
     async def create_broker(name, broker, port, topic_prefix, username, password, dialog):
         from app.core.mqtt_client import MQTTConnectionProfile
@@ -1370,7 +1370,7 @@ def mqtt_page():
         if success:
             ui.notify(f"Published to {topic}", type='positive')
         else:
-            ui.notify("Publish failed — not connected?", type='negative')
+            ui.notify("Publish failed - not connected?", type='negative')
 
     # Poll for updates
     async def mqtt_refresh_loop():
@@ -1383,7 +1383,7 @@ def mqtt_page():
 
 
 def marketplace_page():
-    """Plugin Marketplace — browse, install, and share protocol decoder plugins."""
+    """Plugin Marketplace - browse, install, and share protocol decoder plugins."""
     # Built-in catalog (would be fetched from GitHub in production)
     catalog = [
         {
@@ -1453,35 +1453,35 @@ def marketplace_page():
 
     with ui.column().classes('w-full gap-4'):
         # Header
-        with ui.row().classes('w-full items-center justify-between'):
+        with ui.row().classes('w-full items-center justify-between mb-3'):
             with ui.column():
                 ui.label('Plugin Marketplace').classes('text-white font-medium text-lg')
-                ui.label('Browse and install community protocol decoders').classes('text-[#62666d] text-sm')
-            with ui.row().classes('gap-2'):
-                ui.label(f'{len(installed_plugins)} installed').classes('text-[#27a644] text-xs font-mono')
+                ui.label('Browse and install community protocol decoders').classes('text-[#52525b] text-sm')
+            with ui.row().classes('gap-2 mt-1'):
+                ui.label(f'{len(installed_plugins)} installed').classes('text-[#22c55e] text-xs font-mono')
 
         # Search bar
-        search_input = ui.input('Search plugins...', placeholder='Search by name, tag, or description').classes('w-full').props('outlined dense').style('color: #d0d6e0')
+        search_input = ui.input('Search plugins...', placeholder='Search by name, tag, or description').classes('w-full').props('outlined dense').style('color: #e4e4e7')
         search_input.on_value_change(lambda: refresh_catalog())
 
         # Installed section
         if installed_plugins:
             with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(39,166,68,0.2)'):
                 ui.label('✅ Installed Plugins').classes('text-white font-medium mb-3')
-                with ui.column().classes('w-full gap-2'):
+                with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
                     for plugin in installed_plugins:
-                        with ui.row().classes('w-full items-center justify-between p-2 rounded-md').style('background: rgba(255,255,255,0.01)'):
+                        with ui.row().classes('w-full items-center justify-between p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
                             with ui.row().classes('items-center gap-2'):
                                 ui.label('📦').classes('text-sm')
                                 with ui.column().classes('gap-0'):
-                                    ui.label(plugin['name']).classes('text-[#d0d6e0] text-sm font-medium')
-                                    ui.label(f"v{plugin['version']} · {plugin['author']}").classes('text-[#62666d] text-xs')
-                            with ui.row().classes('gap-2'):
-                                ui.label('Installed').classes('text-[#27a644] text-xs')
-                                ui.button('Uninstall', on_click=lambda p=plugin: uninstall_plugin(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#e5484d] px-2 py-0.5 text-xs rounded')
+                                    ui.label(plugin['name']).classes('text-[#e4e4e7] text-sm font-medium')
+                                    ui.label(f"v{plugin['version']} · {plugin['author']}").classes('text-[#52525b] text-xs')
+                            with ui.row().classes('gap-2 mt-1'):
+                                ui.label('Installed').classes('text-[#22c55e] text-xs')
+                                ui.button('Uninstall', on_click=lambda p=plugin: uninstall_plugin(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#ef4444] px-2 py-0.5 text-xs rounded')
 
         # Catalog grid
-        catalog_container = ui.column().classes('w-full gap-3')
+        catalog_container = ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto')
 
     def refresh_catalog():
         query = search_input.value.lower().strip() if search_input.value else ''
@@ -1496,29 +1496,29 @@ def marketplace_page():
 
         if not filtered:
             with catalog_container:
-                with ui.card().classes('w-full p-8 text-center').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                with ui.card().classes('w-full p-12 text-center').style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label('🔍').classes('text-3xl mb-2')
-                    ui.label('No plugins found').classes('text-[#d0d6e0] font-medium')
-                    ui.label('Try a different search term').classes('text-[#62666d] text-sm')
+                    ui.label('No plugins found').classes('text-[#e4e4e7] font-medium')
+                    ui.label('Try a different search term').classes('text-[#52525b] text-sm')
         else:
             with catalog_container:
                 for plugin in filtered:
-                    with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                    with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
                         with ui.row().classes('w-full items-start justify-between'):
                             with ui.column().classes('gap-1 flex-1'):
                                 with ui.row().classes('items-center gap-2'):
                                     ui.label(plugin['name']).classes('text-white font-medium text-sm')
-                                    ui.label(f"v{plugin['version']}").classes('text-[#62666d] text-xs font-mono')
-                                ui.label(plugin['description']).classes('text-[#8a8f98] text-xs leading-relaxed')
+                                    ui.label(f"v{plugin['version']}").classes('text-[#52525b] text-xs font-mono')
+                                ui.label(plugin['description']).classes('text-[#71717a] text-xs leading-relaxed')
                                 with ui.row().classes('gap-1 mt-1'):
                                     for tag in plugin['tags']:
-                                        ui.label(tag).classes('text-[#7170ff] text-[10px] bg-[rgba(113,112,255,0.1)] px-1.5 py-0.5 rounded')
-                                ui.label(f"by {plugin['author']} · {plugin['downloads']:,} downloads").classes('text-[#62666d] text-[10px] mt-1')
+                                        ui.label(tag).classes('text-[#5c8af0] text-[10px] bg-[rgba(113,112,255,0.1)] px-1.5 py-0.5 rounded')
+                                ui.label(f"by {plugin['author']} · {plugin['downloads']:,} downloads").classes('text-[#52525b] text-[10px] mt-1')
                             with ui.column().classes('gap-2 items-end'):
                                 if plugin['installed']:
-                                    ui.label('✅ Installed').classes('text-[#27a644] text-xs')
+                                    ui.label('✅ Installed').classes('text-[#22c55e] text-xs')
                                 else:
-                                    ui.button('Install', on_click=lambda p=plugin: install_plugin(p)).classes('bg-[#5e6ad2] text-white px-3 py-1 text-xs rounded-md')
+                                    ui.button('Install', on_click=lambda p=plugin: install_plugin(p)).classes('bg-[#5c6fd0] text-white px-3 py-1 text-xs rounded-lg')
 
     async def install_plugin(plugin):
         ui.notify(f"Installing '{plugin['name']}'...", type='info')
@@ -1538,7 +1538,7 @@ def marketplace_page():
 
 
 def decoder_page():
-    """Protocol decoder — hex input, decode, structured output, DBC file loading."""
+    """Protocol decoder - hex input, decode, structured output, DBC file loading."""
     dbc_info = {'loaded': False, 'messages': 0, 'signals': 0}
 
     with ui.column().classes('w-full gap-4'):
@@ -1546,35 +1546,35 @@ def decoder_page():
         with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(113,112,255,0.2)'):
             with ui.row().classes('w-full items-center justify-between mb-2'):
                 ui.label('📁 CAN Database (.dbc)').classes('text-white font-medium')
-                ui.button('Load DBC File', on_click=show_dbc_upload_dialog).classes('bg-[#7170ff] text-white px-3 py-1 text-sm rounded-md')
+                ui.button('Load DBC File', on_click=show_dbc_upload_dialog).classes('bg-[#5c8af0] text-white px-3 py-1 text-sm rounded-lg')
             with ui.row().classes('w-full items-center gap-3'):
-                ui.label('Status:').classes('text-[#8a8f98] text-xs')
-                dbc_status_label = ui.label('No DBC loaded').classes('text-[#62666d] text-xs font-mono')
-                ui.label('Messages:').classes('text-[#8a8f98] text-xs')
-                dbc_msgs_label = ui.label('0').classes('text-[#62666d] text-xs font-mono')
-                ui.label('Signals:').classes('text-[#8a8f98] text-xs')
-                dbc_sigs_label = ui.label('0').classes('text-[#62666d] text-xs font-mono')
+                ui.label('Status:').classes('text-[#71717a] text-xs')
+                dbc_status_label = ui.label('No DBC loaded').classes('text-[#52525b] text-xs font-mono')
+                ui.label('Messages:').classes('text-[#71717a] text-xs')
+                dbc_msgs_label = ui.label('0').classes('text-[#52525b] text-xs font-mono')
+                ui.label('Signals:').classes('text-[#71717a] text-xs')
+                dbc_sigs_label = ui.label('0').classes('text-[#52525b] text-xs font-mono')
 
         with ui.row().classes('w-full items-center gap-3'):
             protocol = ui.select(
                 ['auto'] + [p['id'] for p in protocol_manager.list_decoders()],
                 value='auto', label='Protocol'
-            ).classes('bg-[rgba(255,255,255,0.02)] text-[#d0d6e0] border border-[rgba(255,255,255,0.08)] px-3 py-2 rounded-md w-48')
-            raw_input = ui.input('Hex Data', placeholder='e.g. 7848656C6C6F00 or 010300010001').classes('flex-1').props('outlined').style('color: #d0d6e0; font-family: JetBrains Mono, monospace')
-            ui.button('Decode', on_click=lambda: do_decode(raw_input.value, protocol.value)).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
+            ).classes('bg-[rgba(255,255,255,0.02)] text-[#e4e4e7] border border-[rgba(255,255,255,0.10)] px-3 py-2 rounded-lg w-48')
+            raw_input = ui.input('Hex Data', placeholder='e.g. 7848656C6C6F00 or 010300010001').classes('flex-1').props('outlined').style('color: #e4e4e7; font-family: JetBrains Mono, monospace')
+            ui.button('Decode', on_click=lambda: do_decode(raw_input.value, protocol.value)).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
 
-        result_container = ui.column().classes('w-full gap-2')
+        result_container = ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto')
 
         def show_dbc_upload_dialog():
             """Dialog to paste DBC file content."""
             dialog = ui.dialog()
-            with dialog, ui.card().classes('p-6 w-[600px]').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+            with dialog, ui.card().classes('p-6 w-[600px]').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
                 ui.label('Load CAN Database (.dbc)').classes('text-white font-medium mb-4 text-lg')
-                ui.label('Paste DBC file content below:').classes('text-[#8a8f98] text-xs mb-2')
-                dbc_input = ui.textarea('DBC Content', placeholder='BO_ 100 EngineData: 8 Vector__XXX\n SG_ RPM : 0|16@1+ (1,0) [0|8000] "rpm" Vector__XXX').classes('w-full h-48 mb-4').props('outlined').style('color: #d0d6e0; font-family: monospace; font-size: 11px')
+                ui.label('Paste DBC file content below:').classes('text-[#71717a] text-xs mb-2')
+                dbc_input = ui.textarea('DBC Content', placeholder='BO_ 100 EngineData: 8 Vector__XXX\n SG_ RPM : 0|16@1+ (1,0) [0|8000] "rpm" Vector__XXX').classes('w-full h-48 mb-4').props('outlined').style('color: #e4e4e7; font-family: monospace; font-size: 11px')
                 with ui.row().classes('gap-2 justify-end w-full'):
-                    ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#8a8f98]')
-                    ui.button('Load', on_click=lambda: do_load_dbc(dbc_input.value, dialog)).classes('bg-[#7170ff] text-white px-4 py-2 rounded-md')
+                    ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
+                    ui.button('Load', on_click=lambda: do_load_dbc(dbc_input.value, dialog)).classes('bg-[#5c8af0] text-white px-4 py-2 rounded-lg')
 
         async def do_load_dbc(content, dialog):
             if not content.strip():
@@ -1615,7 +1615,7 @@ def decoder_page():
                 decoder = protocol_manager.auto_detect(raw_data)
                 if not decoder:
                     with result_container:
-                        ui.label('No protocol detected').classes('text-[#e5484d]').style('padding: 20px')
+                        ui.label('No protocol detected').classes('text-[#ef4444]').style('padding: 20px')
                     return
                 proto_id = decoder.protocol_id
 
@@ -1625,13 +1625,13 @@ def decoder_page():
             with result_container:
                 with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(113,112,255,0.2)'):
                     with ui.row().classes('items-center gap-2 mb-3'):
-                        ui.label(decoder.name).classes('text-[#7170ff] font-medium text-sm').style('background: rgba(113,112,255,0.15); padding: 2px 8px; border-radius: 9999px')
-                        ui.label(proto_id).classes('text-[#62666d] text-xs font-mono')
+                        ui.label(decoder.name).classes('text-[#5c8af0] font-medium text-sm').style('background: rgba(113,112,255,0.15); padding: 2px 8px; border-radius: 9999px')
+                        ui.label(proto_id).classes('text-[#52525b] text-xs font-mono')
                     with ui.column().classes('gap-1 font-mono text-sm'):
                         for key, value in decoded.items():
                             with ui.row().classes('gap-3'):
-                                ui.label(key).classes('text-[#8a8f98] min-w-32')
-                                ui.label(str(value)).classes('text-[#d0d6e0]')
+                                ui.label(key).classes('text-[#71717a] min-w-32')
+                                ui.label(str(value)).classes('text-[#e4e4e7]')
 
 
 # ─── Main Layout ─────────────────────────────────────────────────────────────
