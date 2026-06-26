@@ -210,17 +210,150 @@ def devices_page():
 
 
 def terminal_page():
-    """Terminal view — real-time serial output."""
+    """Terminal view — real-time serial output with search & filter."""
     global selected_device
 
     if not selected_device:
         ui.label('No device selected — go to Devices tab').classes('text-[#62666d]').style('padding: 40px')
         return
 
-    ui.label(f"Device: {selected_device.name} ({selected_device.port})").classes('text-[#8a8f98] text-sm mb-2')
+    # State for terminal
+    terminal_state = {'lines': [], 'search': '', 'case_sensitive': False, 'regex': False, 'match_count': 0, 'current_match': 0, 'filter_level': 'all', 'filter_metric': ''}
 
-    log_area = ui.column().classes('w-full gap-0.5 overflow-y-auto') \
-        .style('max-height: 60vh; background: #0f1011; padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); font-family: JetBrains Mono, monospace; font-size: 13px; width: 100%')
+    with ui.column().classes('w-full gap-2'):
+        # Header
+        with ui.row().classes('w-full items-center justify-between'):
+            ui.label(f"Device: {selected_device.name} ({selected_device.port})").classes('text-[#8a8f98] text-sm')
+            ui.label('0 lines').classes('text-[#62666d] text-xs font-mono').bind_text_from(terminal_state, 'match_count', lambda v: f"{len(terminal_state['lines'])} lines")
+
+        # Search & Filter bar
+        with ui.row().classes('w-full gap-2 items-center'):
+            search_input = ui.input('Search (Ctrl+F)', placeholder='Type to search...').classes('flex-1').props('outlined dense').style('color: #d0d6e0; font-family: JetBrains Mono, monospace; font-size: 12px')
+            search_input.bind_value(terminal_state, 'search')
+            case_toggle = ui.checkbox('Case sensitive').classes('text-[#8a8f98] text-xs').bind_value(terminal_state, 'case_sensitive')
+            regex_toggle = ui.checkbox('Regex').classes('text-[#8a8f98] text-xs').bind_value(terminal_state, 'regex')
+            level_select = ui.select(['all', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'metric', 'json'], value='all', label='Filter').classes('w-24').props('outlined dense').bind_value(terminal_state, 'filter_level')
+            metric_input = ui.input('Metric', placeholder='e.g. TEMP').classes('w-28').props('outlined dense').bind_value(terminal_state, 'filter_metric')
+
+        # Match navigation bar
+        with ui.row().classes('w-full gap-2 items-center'):
+            match_label = ui.label('No matches').classes('text-[#62666d] text-xs flex-1')
+            ui.button('◀', on_click=lambda: navigate_match(-1)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
+            ui.button('▶', on_click=lambda: navigate_match(1)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
+            ui.button('Clear', on_click=lambda: clear_search()).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
+
+        # Log area
+        log_area = ui.column().classes('w-full gap-0 overflow-y-auto') \
+            .style('max-height: 55vh; background: #0f1011; padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); font-family: JetBrains Mono, monospace; font-size: 13px; width: 100%')
+
+    def _apply_search_filter():
+        """Apply search and filter to all stored lines, re-render log area."""
+        search = terminal_state['search']
+        case_sensitive = terminal_state['case_sensitive']
+        use_regex = terminal_state['regex']
+        level = terminal_state['filter_level']
+        metric_filter = terminal_state['filter_metric'].strip().upper()
+
+        import re as _re
+        matches = []
+
+        # Compile regex if needed
+        pattern = None
+        if search:
+            flags = 0 if case_sensitive else _re.IGNORECASE
+            if use_regex:
+                try:
+                    pattern = _re.compile(search, flags)
+                except _re.error:
+                    pattern = None
+            else:
+                pattern = _re.compile(_re.escape(search), flags)
+
+        for i, (timestamp, line, line_type) in enumerate(terminal_state['lines']):
+            # Level filter
+            if level != 'all':
+                if level == 'ERROR' and 'ERROR' not in line.upper():
+                    continue
+                elif level == 'WARN' and not any(w in line.upper() for w in ['WARN', 'WARNING']):
+                    continue
+                elif level == 'INFO' and 'INFO' not in line.upper():
+                    continue
+                elif level == 'DEBUG' and 'DEBUG' not in line.upper():
+                    continue
+                elif level == 'metric' and line_type != 'metric':
+                    continue
+                elif level == 'json' and line_type != 'json':
+                    continue
+
+            # Metric filter
+            if metric_filter and metric_filter not in line.upper():
+                continue
+
+            # Search filter
+            is_match = True
+            if pattern:
+                check_line = line if case_sensitive else line.lower()
+                is_match = bool(pattern.search(check_line))
+
+            matches.append((i, timestamp, line, line_type, is_match))
+
+        # Render filtered results
+        log_area.clear()
+        match_indices = [idx for idx, (_, _, _, _, m) in enumerate(matches) if m and search]
+        terminal_state['match_count'] = len(match_indices)
+
+        if not match_label:
+            pass
+        if match_indices:
+            match_label.text = f"Match {terminal_state['current_match'] + 1} of {len(match_indices)}"
+        elif search:
+            match_label.text = "No matches"
+        else:
+            match_label.text = f"{len(terminal_state['lines'])} lines"
+
+        with log_area:
+            for idx, (orig_i, ts, line, line_type, is_match) in enumerate(matches):
+                # Color based on line type
+                if line_type == 'error':
+                    color = '#e5484d'
+                elif line_type == 'warn':
+                    color = '#f5a623'
+                elif line_type == 'metric':
+                    color = '#7170ff'
+                elif line_type == 'json':
+                    color = '#27a644'
+                else:
+                    color = '#d0d6e0'
+
+                # Highlight search matches
+                bg_style = 'background: rgba(113,112,255,0.2); border-radius: 2px;' if is_match and search else ''
+                ui.label(f"[{ts}] {line}").classes(f'leading-relaxed font-mono').style(f'color: {color}; {bg_style}')
+
+    def navigate_match(direction):
+        """Navigate to next/prev match."""
+        if direction == '__init__':
+            return
+        # Re-run search to get match count
+        _apply_search_filter()
+        if terminal_state['match_count'] == 0:
+            return
+        terminal_state['current_match'] = (terminal_state['current_match'] + direction) % terminal_state['match_count']
+        _apply_search_filter()
+
+    def clear_search():
+        """Clear search and reset filters."""
+        terminal_state['search'] = ''
+        terminal_state['filter_level'] = 'all'
+        terminal_state['filter_metric'] = ''
+        terminal_state['current_match'] = 0
+        _apply_search_filter()
+
+    # Wire up reactive search
+    search_input.on_value_change(lambda: _apply_search_filter())
+    case_toggle.on_value_change(lambda: _apply_search_filter())
+    regex_toggle.on_value_change(lambda: _apply_search_filter())
+    level_select.on_value_change(lambda: _apply_search_filter())
+    metric_input.on_value_change(lambda: _apply_search_filter())
 
     async def stream_loop():
         if not selected_device:
@@ -235,9 +368,30 @@ def terminal_page():
         try:
             while True:
                 line = await asyncio.wait_for(queue.get(), timeout=1)
-                with log_area:
-                    ts = datetime.utcnow().strftime('%H:%M:%S')
-                    ui.label(f"[{ts}] {line}").classes('text-[#d0d6e0] leading-relaxed')
+                ts = datetime.utcnow().strftime('%H:%M:%S')
+
+                # Detect line type
+                line_upper = line.upper()
+                if any(w in line_upper for w in ['ERROR', 'FATAL']):
+                    line_type = 'error'
+                elif any(w in line_upper for w in ['WARN', 'WARNING']):
+                    line_type = 'warn'
+                elif line.startswith('{') and line.endswith('}'):
+                    line_type = 'json'
+                elif any(line_upper.startswith(m) for m in ['TEMP', 'VOLTAGE', 'HUMIDITY', 'PRESSURE', 'CURRENT', 'POWER', 'ADC', 'PWM', 'FREQ', 'RSSI', 'SNR']):
+                    line_type = 'metric'
+                else:
+                    line_type = 'log'
+
+                terminal_state['lines'].append((ts, line, line_type))
+
+                # Keep max 5000 lines in memory
+                if len(terminal_state['lines']) > 5000:
+                    terminal_state['lines'] = terminal_state['lines'][-5000:]
+
+                # Incremental render (every 10 lines for performance)
+                if len(terminal_state['lines']) % 1 == 0:
+                    _apply_search_filter()
         except asyncio.TimeoutError:
             pass
 
