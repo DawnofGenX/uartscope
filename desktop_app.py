@@ -267,8 +267,18 @@ def alerts_page():
 
         # Stats
         unack = len([a for a in events if not a.get('acknowledged')])
+        by_sev = {}
+        for a in events:
+            s = a.get('severity', 'warning')
+            by_sev[s] = by_sev.get(s, 0) + 1
         with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val, color in [('Unacknowledged', unack, '#e5484d'), ('Total Alerts', len(events), '#f7f8f8'), ('Active Rules', len(rules), '#7170ff')]:
+            for label, val, color in [
+                ('Unacknowledged', unack, '#e5484d'),
+                ('Total Alerts', len(events), '#f7f8f8'),
+                ('Critical', by_sev.get('critical', 0), '#e5484d'),
+                ('Warning', by_sev.get('warning', 0), '#f5a623'),
+                ('Active Rules', len(rules), '#7170ff'),
+            ]:
                 with ui.card().classes('flex-1 p-3') \
                     .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
                     ui.label(str(val)).classes('text-xl font-medium').style(f'color: {color}')
@@ -308,13 +318,16 @@ def alerts_page():
             else:
                 with ui.column().classes('w-full gap-1 max-h-72 overflow-y-auto'):
                     for alert in reversed(events[-20:]):
-                        with ui.row().classes('w-full items-center gap-2 p-2 rounded-md').style('background: rgba(255,255,255,0.01)'):
+                        acked = alert.get('acknowledged', False)
+                        with ui.row().classes(f'w-full items-center gap-2 p-2 rounded-md {"opacity-50" if acked else ""}').style('background: rgba(255,255,255,0.01)'):
                             sev = severity_color(alert.get('severity', 'warning'))
                             ui.label('●').style(f'color: {sev}').classes('text-xs')
                             ui.label(alert.get('timestamp', '')[:19]).classes('text-[#62666d] text-xs font-mono')
-                            ui.label(alert.get('message', '')).classes('text-[#d0d6e0] text-sm flex-1')
-                            if not alert.get('acknowledged'):
-                                ui.button('✓', on_click=lambda a=alert: ack_alert(a)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] px-2 py-0.5 text-xs rounded')
+                            ui.label(alert.get('message', '')).classes(f'text-[#d0d6e0] text-sm flex-1 {"line-through" if acked else ""}')
+                            if not acked:
+                                ui.button('✓ Ack', on_click=lambda a=alert: ack_alert(a)).classes('bg-[rgba(113,112,255,0.1)] text-[#7170ff] px-2 py-0.5 text-xs rounded font-medium')
+                            else:
+                                ui.label('✓ Acked').classes('text-[#27a644] text-xs')
 
     def show_add_rule_dialog():
         dialog = ui.dialog()
@@ -322,8 +335,10 @@ def alerts_page():
             ui.label('New Alert Rule').classes('text-white font-medium mb-4 text-lg')
             name = ui.input('Name', value='High Temperature').classes('mb-3 w-full').props('outlined').style('color: #d0d6e0')
             metric = ui.input('Metric', value='TEMP').classes('mb-3 w-full').props('outlined').style('color: #d0d6e0')
-            condition = ui.select(['gt', 'lt', 'eq', 'range', 'change'], value='gt').classes('mb-3 w-full').props('outlined').style('color: #d0d6e0')
-            threshold = ui.number('Threshold', value=30).classes('mb-3 w-full').props('outlined').style('color: #d0d6e0')
+            condition = ui.select(['gt', 'lt', 'eq', 'range', 'change'], value='gt').classes('mb-1 w-full').props('outlined').style('color: #d0d6e0')
+            ui.label('gt=greater than, lt=less than, eq=equals, range=outside range, change=delta exceeds threshold').classes('text-[#62666d] text-[10px] mb-3 ml-1')
+            threshold_label = 'Min Δ (delta)' if condition.value == 'change' else 'Threshold'
+            threshold = ui.number(threshold_label, value=30).classes('mb-3 w-full').props('outlined').style('color: #d0d6e0')
             cooldown = ui.number('Cooldown (s)', value=60).classes('mb-4 w-full').props('outlined').style('color: #d0d6e0')
             with ui.row().classes('gap-2 justify-end w-full'):
                 ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#8a8f98]')
@@ -354,6 +369,26 @@ def alerts_page():
         for alert in get_alert_events():
             alert_engine.acknowledge_alert(alert.get('id', ''))
         refresh_alerts()
+
+    # Poll for new alerts every 2 seconds and show toast notifications
+    import asyncio
+    _last_alert_count = len(get_alert_events())
+
+    async def check_new_alerts():
+        nonlocal _last_alert_count
+        while True:
+            await asyncio.sleep(2)
+            current = get_alert_events()
+            if len(current) > _last_alert_count:
+                new = current[_last_alert_count:]
+                for a in new:
+                    if not a.get('acknowledged'):
+                        sev = a.get('severity', 'warning')
+                        color = {'critical': 'negative', 'warning': 'warning', 'info': 'info'}.get(sev, 'info')
+                        ui.notify(f"🚨 {a.get('message', '')}", type=color, timeout=6000)
+                _last_alert_count = len(current)
+
+    asyncio.create_task(check_new_alerts())
 
     refresh_alerts()
 
