@@ -17,12 +17,13 @@ from app.api.routes.export import router as export_router
 from app.api.routes.protocols import router as protocols_router
 from app.api.routes.websocket import router as ws_router, setup_telemetry_pipeline
 from app.api.routes.performance import router as performance_router
+from app.api.routes.mqtt import router as mqtt_router
 from app.core.device_manager import device_manager
 from app.core.serial_reader import serial_reader
 from app.core.telemetry_engine import telemetry_engine
 from app.core.session_recorder import session_recorder
 from app.core.performance_tracker import performance_tracker
-from app.core.mqtt_client import mqtt_client
+from app.core.mqtt_client import mqtt_manager, MQTTConnectionProfile, MQTTMessage
 from app.core.websocket_hub import ws_manager
 from app.core.alert_engine import alert_engine
 
@@ -49,10 +50,27 @@ async def lifespan(app: FastAPI):
     # Setup telemetry pipeline (returns the on_data callback factory)
     on_data_factory = await setup_telemetry_pipeline()
 
-    # Register MQTT callback
-    async def on_mqtt_data(data):
-        logger.info(f"MQTT data received: {data.get('topic')}")
-    mqtt_client.register_callback(on_mqtt_data)
+    # Register MQTT callback for WebSocket bridge
+    async def on_mqtt_message(msg: MQTTMessage):
+        """Bridge MQTT messages to WebSocket clients."""
+        await ws_manager.broadcast_to_all({
+            "type": "mqtt_message",
+            "topic": msg.topic,
+            "payload": msg.payload,
+            "json": msg.json_data,
+            "timestamp": msg.timestamp.isoformat(),
+        })
+        # Also feed into telemetry engine if it has parseable data
+        if msg.json_data:
+            for key, val in msg.json_data.items():
+                if isinstance(val, (int, float)):
+                    from app.core.telemetry_engine import Metric
+                    await alert_engine.evaluate(
+                        f"mqtt_{msg.connection_id}", "mqtt_session",
+                        Metric(name=key, value=float(val), unit=None)
+                    )
+
+    mqtt_manager.register_callback(on_mqtt_message)
 
     # Start heartbeat monitor for auto-reconnect
     await device_manager.start_heartbeat_monitor()
@@ -71,9 +89,17 @@ async def lifespan(app: FastAPI):
 
     alert_engine.register_callback(on_alert)
 
-    # Auto-connect to first available device (optional)
+    # Auto-connect to MQTT if enabled in config
     if settings.mqtt_enabled:
-        await mqtt_client.connect()
+        from app.core.mqtt_client import MQTTConnectionProfile
+        profile = MQTTConnectionProfile(
+            name="Default",
+            broker=settings.mqtt_broker,
+            port=settings.mqtt_port,
+            topic_prefix=settings.mqtt_topic_prefix,
+        )
+        mqtt_manager.add_profile(profile)
+        await mqtt_manager.connect(profile.id)
 
     logger.info("Application ready")
     yield
@@ -83,7 +109,7 @@ async def lifespan(app: FastAPI):
     await device_manager.stop_heartbeat_monitor()
     await performance_tracker.stop()
     await serial_reader.stop_all()
-    await mqtt_client.disconnect()
+    await mqtt_manager.shutdown()
     logger.info("Shutdown complete")
 
 
@@ -112,6 +138,7 @@ app.include_router(export_router, prefix="/api")
 app.include_router(protocols_router, prefix="/api")
 app.include_router(ws_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
+app.include_router(mqtt_router, prefix="/api")
 
 
 @app.get("/api/health")

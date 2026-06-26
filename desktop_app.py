@@ -20,6 +20,7 @@ from app.core.serial_reader import serial_reader
 from app.core.websocket_hub import ws_manager
 from app.core.protocol_decoder import protocol_manager
 from app.core.performance_tracker import performance_tracker
+from app.core.mqtt_client import mqtt_manager
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ def build_sidebar():
                 ('terminal', '▸', 'Terminal'),
                 ('charts', '◇', 'Charts'),
                 ('performance', '⚡', 'Performance'),
+                ('mqtt', '☁', 'MQTT'),
                 ('alerts', '◉', 'Alerts'),
                 ('sessions', '⟳', 'Sessions'),
                 ('decoder', '⬡', 'Decoder'),
@@ -622,6 +624,164 @@ def performance_page():
     refresh_performance()
 
 
+def mqtt_page():
+    """MQTT Integration — broker connections, subscriptions, message history."""
+    import time as _time
+
+    def refresh_mqtt():
+        profiles = mqtt_manager.get_all_profiles()
+        stats = mqtt_manager.get_stats()
+        messages = mqtt_manager.get_message_history(limit=50)
+
+        # Stats bar
+        with ui.row().classes('w-full gap-3 mb-4'):
+            for label, val, color in [
+                ('Connections', f"{stats.get('connected', 0)}/{stats.get('total_connections', 0)}", '#7170ff'),
+                ('Messages', str(stats.get('total_messages', 0)), '#27a644'),
+                ('Data', format_bytes(stats.get('total_bytes', 0)), '#f5a623'),
+                ('History', str(stats.get('history_size', 0)), '#8a8f98'),
+            ]:
+                with ui.card().classes('flex-1 p-3') \
+                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                    ui.label(str(val)).classes('text-lg font-medium font-mono').style(f'color: {color}')
+                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+
+        # Connection profiles
+        with ui.card().classes('w-full p-4 mb-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+            with ui.row().classes('w-full items-center justify-between mb-3'):
+                ui.label('Broker Connections').classes('text-white font-medium')
+                ui.button('+ Add Broker', on_click=show_add_broker_dialog).classes('bg-[#5e6ad2] text-white px-3 py-1 text-sm rounded-md')
+
+            if not profiles:
+                ui.label('No MQTT connections configured').classes('text-[#62666d] text-sm py-4')
+            else:
+                with ui.column().classes('w-full gap-2'):
+                    for profile in profiles:
+                        with ui.card().classes('w-full p-3').style('background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.05)'):
+                            with ui.row().classes('w-full items-center justify-between'):
+                                with ui.row().classes('items-center gap-3'):
+                                    sc = '#27a644' if profile.connected else '#62666d'
+                                    ui.label('●').classes('text-xs').style(f'color: {sc}')
+                                    with ui.column().classes('gap-0.5'):
+                                        ui.label(profile.name).classes('text-white font-medium text-sm')
+                                        ui.label(f"{profile.broker}:{profile.port}").classes('text-[#62666d] text-xs font-mono')
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.label(f"{profile.messages_received} msgs").classes('text-[#62666d] text-xs font-mono')
+                                    if profile.connected:
+                                        ui.button('Disconnect', on_click=lambda p=profile: disconnect_broker(p)).classes('bg-[#e5484d] text-white px-2 py-0.5 text-xs rounded')
+                                    else:
+                                        ui.button('Connect', on_click=lambda p=profile: connect_broker(p)).classes('bg-[#27a644] text-white px-2 py-0.5 text-xs rounded')
+                                    ui.button('Delete', on_click=lambda p=profile: delete_broker(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#e5484d] px-2 py-0.5 text-xs rounded')
+
+        # Subscriptions + Publish panel
+        if profiles:
+            with ui.row().classes('w-full gap-3 mb-4'):
+                # Subscriptions
+                with ui.card().classes('flex-1 p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                    ui.label('Subscriptions').classes('text-white font-medium mb-2')
+                    with ui.column().classes('w-full gap-1'):
+                        for profile in profiles:
+                            if profile.subscribed_topics:
+                                for topic in profile.subscribed_topics:
+                                    with ui.row().classes('items-center gap-2 p-1.5 rounded').style('background: rgba(255,255,255,0.01)'):
+                                        ui.label('📡').classes('text-xs')
+                                        ui.label(topic).classes('text-[#d0d6e0] text-xs font-mono flex-1')
+                                        ui.button('✕', on_click=lambda p=profile, t=topic: unsubscribe_topic(p, t)).classes('text-[#e5484d] text-xs px-1')
+
+                # Publish panel
+                with ui.card().classes('flex-1 p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                    ui.label('Publish Message').classes('text-white font-medium mb-2')
+                    pub_profile = ui.select(
+                        {p.id: p.name for p in profiles if p.connected},
+                        label='Connection',
+                        value=profiles[0].id if profiles else None,
+                    ).classes('w-full mb-2').props('outlined').style('color: #d0d6e0')
+                    pub_topic = ui.input('Topic', value='command').classes('w-full mb-2').props('outlined').style('color: #d0d6e0')
+                    pub_payload = ui.textarea('Payload (JSON or text)', value='{"cmd": "status"}').classes('w-full mb-2').props('outlined').style('color: #d0d6e0; font-family: monospace')
+                    ui.button('Publish', on_click=lambda: do_publish(pub_profile.value, pub_topic.value, pub_payload.value)).classes('bg-[#5e6ad2] text-white px-4 py-1.5 text-sm rounded-md w-full')
+
+        # Message history
+        with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+            ui.label('Message History (last 50)').classes('text-white font-medium mb-3')
+            if not messages:
+                ui.label('No messages yet. Connect to an MQTT broker to receive data.').classes('text-[#62666d] text-sm py-4')
+            else:
+                with ui.column().classes('w-full gap-1 max-h-72 overflow-y-auto'):
+                    for msg in reversed(messages):
+                        with ui.row().classes('w-full items-start gap-2 p-2 rounded-md').style('background: rgba(255,255,255,0.01)'):
+                            ui.label(msg.timestamp.strftime('%H:%M:%S')).classes('text-[#62666d] text-xs font-mono')
+                            ui.label(msg.topic).classes('text-[#7170ff] text-xs font-mono min-w-32')
+                            ui.label(msg.payload[:80]).classes('text-[#d0d6e0] text-xs flex-1 font-mono')
+
+    # Actions
+    def show_add_broker_dialog():
+        dialog = ui.dialog()
+        with dialog, ui.card().classes('p-6 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+            ui.label('Add MQTT Broker').classes('text-white font-medium mb-4 text-lg')
+            name = ui.input('Name', value='My Broker').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
+            broker = ui.input('Broker Host', value='broker.hivemq.com').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
+            port = ui.number('Port', value=1883).classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
+            topic_prefix = ui.input('Topic Prefix', value='uartscope').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
+            username = ui.input('Username (optional)').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
+            password = ui.input('Password (optional)').classes('mb-2 w-full').props('outlined').style('color: #d0d6e0')
+            with ui.row().classes('gap-2 justify-end w-full mt-4'):
+                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#8a8f98]')
+                ui.button('Add', on_click=lambda: create_broker(
+                    name.value, broker.value, int(port.value), topic_prefix.value,
+                    username.value or None, password.value or None, dialog
+                )).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
+
+    async def create_broker(name, broker, port, topic_prefix, username, password, dialog):
+        from app.core.mqtt_client import MQTTConnectionProfile
+        profile = MQTTConnectionProfile(
+            name=name, broker=broker, port=port, topic_prefix=topic_prefix,
+            username=username, password=password,
+        )
+        mqtt_manager.add_profile(profile)
+        dialog.close()
+        ui.notify(f"Broker '{name}' added", type='positive')
+        refresh_mqtt()
+
+    async def connect_broker(profile):
+        ui.notify(f"Connecting to {profile.name}...", type='info')
+        success = await mqtt_manager.connect(profile.id)
+        if success:
+            ui.notify(f"Connected to {profile.name}", type='positive')
+        else:
+            ui.notify(f"Failed to connect: {profile.last_error}", type='negative')
+        refresh_mqtt()
+
+    async def disconnect_broker(profile):
+        await mqtt_manager.disconnect(profile.id)
+        ui.notify(f"Disconnected from {profile.name}", type='info')
+        refresh_mqtt()
+
+    async def delete_broker(profile):
+        mqtt_manager.remove_profile(profile.id)
+        ui.notify(f"Deleted {profile.name}", type='info')
+        refresh_mqtt()
+
+    async def unsubscribe_topic(profile, topic):
+        await mqtt_manager.unsubscribe(profile.id, topic)
+        refresh_mqtt()
+
+    async def do_publish(profile_id, topic, payload):
+        success = await mqtt_manager.publish(profile_id, topic, payload)
+        if success:
+            ui.notify(f"Published to {topic}", type='positive')
+        else:
+            ui.notify("Publish failed — not connected?", type='negative')
+
+    # Poll for updates
+    async def mqtt_refresh_loop():
+        while True:
+            await asyncio.sleep(3)
+            refresh_mqtt()
+
+    asyncio.create_task(mqtt_refresh_loop())
+    refresh_mqtt()
+
+
 def decoder_page():
     """Protocol decoder — hex input, decode, structured output."""
     with ui.column().classes('w-full gap-4'):
@@ -695,6 +855,8 @@ def render_content():
         session_detail_page()
     elif current_tab == 'performance':
         performance_page()
+    elif current_tab == 'mqtt':
+        mqtt_page()
     elif current_tab == 'decoder':
         decoder_page()
 
