@@ -19,6 +19,7 @@ from app.core.alert_engine import alert_engine, AlertRule
 from app.core.serial_reader import serial_reader
 from app.core.websocket_hub import ws_manager
 from app.core.protocol_decoder import protocol_manager
+from app.core.performance_tracker import performance_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +34,14 @@ def format_bytes(b):
     if b < 1024*1024: return f"{b/1024:.1f} KB"
     return f"{b/(1024*1024):.1f} MB"
 
-def format_duration(started, ended=None):
+def format_duration(started, ended=None, seconds=None):
     try:
-        s = datetime.fromisoformat(started)
-        e = datetime.fromisoformat(ended) if ended else datetime.utcnow()
-        d = int((e - s).total_seconds())
+        if seconds is not None:
+            d = int(seconds)
+        else:
+            s = datetime.fromisoformat(started)
+            e = datetime.fromisoformat(ended) if ended else datetime.utcnow()
+            d = int((e - s).total_seconds())
     except:
         return "—"
     if d < 60: return f"{d}s"
@@ -74,6 +78,7 @@ def build_sidebar():
                 ('devices', '◈', 'Devices'),
                 ('terminal', '▸', 'Terminal'),
                 ('charts', '◇', 'Charts'),
+                ('performance', '⚡', 'Performance'),
                 ('alerts', '◉', 'Alerts'),
                 ('sessions', '⟳', 'Sessions'),
                 ('decoder', '⬡', 'Decoder'),
@@ -491,6 +496,132 @@ def session_detail_page():
         ui.notify('Replay started', type='info')
 
 
+def performance_page():
+    """Performance Analytics — packet rate, throughput, latency, errors, uptime."""
+    def refresh_performance():
+        summary = performance_tracker.get_summary()
+        snapshot = performance_tracker.get_global_snapshot()
+        all_perf = performance_tracker.get_all_perf()
+
+        # Main stats row
+        with ui.row().classes('w-full gap-3 mb-4'):
+            for label, val, color in [
+                ('Current PPS', f"{snapshot.get('current_packet_rate', 0):.1f}", '#7170ff'),
+                ('Throughput', format_bytes(snapshot.get('current_throughput', 0)) + '/s', '#27a644'),
+                ('Avg Latency', f"{snapshot.get('avg_latency_ms', 0):.1f} ms", '#f5a623'),
+                ('Total Errors', str(summary.get('total_errors', 0)), '#e5484d'),
+                ('Error Rate', f"{summary.get('error_rate_per_min', 0):.1f}/min", '#e5484d'),
+            ]:
+                with ui.card().classes('flex-1 p-3') \
+                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                    ui.label(str(val)).classes('text-lg font-medium font-mono').style(f'color: {color}')
+                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+
+        # Aggregate totals
+        with ui.row().classes('w-full gap-3 mb-4'):
+            for label, val in [
+                ('Total Packets', f"{summary.get('total_packets', 0):,}"),
+                ('Total Data', format_bytes(summary.get('total_bytes', 0))),
+                ('Avg PPS', f"{summary.get('avg_packet_rate', 0):.1f}"),
+                ('Avg Throughput', format_bytes(summary.get('avg_throughput', 0)) + '/s'),
+                ('Uptime', format_duration(None, None, seconds=summary.get('total_uptime_seconds', 0))),
+            ]:
+                with ui.card().classes('flex-1 p-3') \
+                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                    ui.label(str(val)).classes('text-lg font-medium text-white font-mono')
+                    ui.label(label).classes('text-[10px] text-[#8a8f98] uppercase tracking-wider')
+
+        # Per-device performance table
+        with ui.card().classes('w-full p-4 mb-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+            ui.label('Per-Device Performance').classes('text-white font-medium mb-3')
+
+            if not all_perf:
+                ui.label('No device data yet').classes('text-[#62666d] text-sm py-4')
+            else:
+                # Table
+                with ui.table({
+                    'columns': [
+                        {'name': 'device', 'label': 'Device', 'field': 'name', 'align': 'left', 'classes': 'text-[#8a8f98] text-xs'},
+                        {'name': 'status', 'label': 'Status', 'field': 'status', 'align': 'left'},
+                        {'name': 'uptime', 'label': 'Uptime', 'field': 'uptime', 'align': 'right'},
+                        {'name': 'packets', 'label': 'Packets', 'field': 'packets', 'align': 'right'},
+                        {'name': 'data', 'label': 'Data', 'field': 'data', 'align': 'right'},
+                        {'name': 'pps', 'label': 'PPS', 'field': 'pps', 'align': 'right'},
+                        {'name': 'throughput', 'label': 'Throughput', 'field': 'throughput', 'align': 'right'},
+                        {'name': 'latency', 'label': 'Latency', 'field': 'latency', 'align': 'right'},
+                        {'name': 'errors', 'label': 'Errors', 'field': 'errors', 'align': 'right'},
+                    ],
+                    'rows': [],
+                    'row_key': 'id',
+                }) as perf_table:
+                    rows = []
+                    for dev_id, p in all_perf.items():
+                        is_connected = p.connected_at and not p.disconnected_at
+                        rows.append({
+                            'id': dev_id,
+                            'name': p.device_name or dev_id,
+                            'status': '● LIVE' if is_connected else '○ OFF',
+                            'uptime': _fmt_uptime(p.uptime_seconds),
+                            'packets': f"{p.total_packets:,}",
+                            'data': format_bytes(p.total_bytes),
+                            'pps': f"{p.current_packet_rate:.1f}",
+                            'throughput': format_bytes(int(p.current_throughput)) + '/s',
+                            'latency': f"{p.avg_latency_ms:.1f}ms",
+                            'errors': str(p.error_count),
+                        })
+                    perf_table.rows = rows
+                    # Style status column
+                    perf_table.props('separator=cell')
+
+        # Latency sparkline (text-based mini chart)
+        with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+            with ui.row().classes('w-full items-center justify-between mb-3'):
+                ui.label('Latency Distribution (last 100 samples)').classes('text-white font-medium')
+                ui.label(f"Avg: {summary.get('avg_latency_ms', 0):.1f}ms").classes('text-[#62666d] text-xs font-mono')
+
+            # Collect all latency samples
+            all_latencies = []
+            for p in all_perf.values():
+                all_latencies.extend(p.latencies)
+
+            if all_latencies:
+                # Build histogram (10 buckets)
+                lat_max = max(all_latencies)
+                lat_min = min(all_latencies)
+                bucket_count = 10
+                bucket_width = (lat_max - lat_min) / bucket_count if lat_max > lat_min else 1
+                buckets = [0] * bucket_count
+                for lat in all_latencies:
+                    idx = min(int((lat - lat_min) / bucket_width), bucket_count - 1) if bucket_width > 0 else 0
+                    buckets[idx] += 1
+
+                max_bucket = max(buckets) if buckets else 1
+                with ui.row().classes('w-full items-end gap-1').style('height: 80px'):
+                    for i, count in enumerate(buckets):
+                        height_pct = (count / max_bucket) * 100 if max_bucket > 0 else 0
+                        label_text = f"{lat_min + i * bucket_width:.0f}"
+                        with ui.column().classes('flex-1 items-center gap-0.5'):
+                            ui.label(str(count)).classes('text-[#62666d] text-[9px] font-mono').style('height: 12px')
+                            ui.label('█').classes('text-[#7170ff]').style(f'font-size: {max(8, height_pct * 0.6):.0f}px; line-height: 1')
+                            ui.label(label_text).classes('text-[#62666d] text-[8px] font-mono')
+            else:
+                ui.label('No latency data yet').classes('text-[#62666d] text-sm py-4')
+
+    def _fmt_uptime(seconds):
+        if seconds < 60: return f"{seconds:.0f}s"
+        if seconds < 3600: return f"{seconds/60:.1f}m"
+        return f"{seconds/3600:.1f}h"
+
+    # Poll for updates
+    async def perf_refresh_loop():
+        while True:
+            await asyncio.sleep(3)
+            refresh_performance()
+
+    asyncio.create_task(perf_refresh_loop())
+    refresh_performance()
+
+
 def decoder_page():
     """Protocol decoder — hex input, decode, structured output."""
     with ui.column().classes('w-full gap-4'):
@@ -562,6 +693,8 @@ def render_content():
         sessions_page()
     elif current_tab == 'session-detail':
         session_detail_page()
+    elif current_tab == 'performance':
+        performance_page()
     elif current_tab == 'decoder':
         decoder_page()
 

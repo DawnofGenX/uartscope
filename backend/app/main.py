@@ -16,10 +16,12 @@ from app.api.routes.alerts import router as alerts_router
 from app.api.routes.export import router as export_router
 from app.api.routes.protocols import router as protocols_router
 from app.api.routes.websocket import router as ws_router, setup_telemetry_pipeline
+from app.api.routes.performance import router as performance_router
 from app.core.device_manager import device_manager
 from app.core.serial_reader import serial_reader
 from app.core.telemetry_engine import telemetry_engine
 from app.core.session_recorder import session_recorder
+from app.core.performance_tracker import performance_tracker
 from app.core.mqtt_client import mqtt_client
 from app.core.websocket_hub import ws_manager
 from app.core.alert_engine import alert_engine
@@ -55,6 +57,10 @@ async def lifespan(app: FastAPI):
     # Start heartbeat monitor for auto-reconnect
     await device_manager.start_heartbeat_monitor()
 
+    # Start performance tracker
+    await performance_tracker.start()
+    logger.info("Performance tracker started")
+
     # Register alert callback for WebSocket broadcasting
     async def on_alert(alert):
         """Broadcast alert events to all connected WebSocket clients."""
@@ -75,6 +81,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down...")
     await device_manager.stop_heartbeat_monitor()
+    await performance_tracker.stop()
     await serial_reader.stop_all()
     await mqtt_client.disconnect()
     logger.info("Shutdown complete")
@@ -104,6 +111,7 @@ app.include_router(alerts_router, prefix="/api")
 app.include_router(export_router, prefix="/api")
 app.include_router(protocols_router, prefix="/api")
 app.include_router(ws_router, prefix="/api")
+app.include_router(performance_router, prefix="/api")
 
 
 @app.get("/api/health")
@@ -162,11 +170,17 @@ async def start_device_stream(device_id: str):
     # Create a dedicated data callback for this device
     # This callback broadcasts only to clients subscribed to this device
     async def on_data(dev_id=device_id, sess_id=session_id, line: str = ""):
+        import time as _time
+        _recv_start = _time.time()
         await telemetry_engine.process_line(dev_id, sess_id, line)
         await session_recorder.record_packet(sess_id, {
             "device_id": dev_id,
             "raw": line,
         })
+
+        # Record performance metrics
+        latency_ms = (_time.time() - _recv_start) * 1000
+        await performance_tracker.on_packet_received(dev_id, len(line.encode()), latency_ms)
 
         # Get latest metrics and broadcast per-device
         latest = telemetry_engine.get_latest_values(dev_id)

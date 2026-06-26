@@ -9,6 +9,7 @@ import serial
 
 from app.config import settings
 from app.models import DeviceCreate, DeviceResponse
+from app.core.performance_tracker import performance_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -218,12 +219,14 @@ class DeviceManager:
             device.status = "connected"
             device.last_seen = datetime.utcnow()
             device.error_count = 0
+            await performance_tracker.on_device_connected(device.id, device.name)
             logger.info(f"Connected to {device.name} @ {device.baudrate} baud")
             return True
         except serial.SerialException as e:
             device.status = "error"
             device.serial_conn = None
             device.error_count += 1
+            await performance_tracker.on_error(device.id, "timeout")
             logger.error(f"Failed to connect to {device.name}: {e}")
             return False
 
@@ -237,6 +240,7 @@ class DeviceManager:
             device.serial_conn.close()
             device.status = "disconnected"
             device.serial_conn = None
+            await performance_tracker.on_device_disconnected(device.id)
             logger.info(f"Disconnected {device.name}")
             return True
         except Exception as e:
