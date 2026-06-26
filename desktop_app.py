@@ -226,8 +226,130 @@ def terminal_page():
             ui.label(f"Device: {selected_device.name} ({selected_device.port})").classes('text-[#8a8f98] text-sm')
             ui.label('0 lines').classes('text-[#62666d] text-xs font-mono').bind_text_from(terminal_state, 'match_count', lambda v: f"{len(terminal_state['lines'])} lines")
 
-        # Search & Filter bar
+        # Command bar
         with ui.row().classes('w-full gap-2 items-center'):
+            cmd_input = ui.input('Send command', placeholder='Type a command and press Enter...').classes('flex-1').props('outlined dense').style('color: #d0d6e0; font-family: JetBrains Mono, monospace; font-size: 12px')
+            ui.button('Send', on_click=lambda: send_command()).classes('bg-[#27a644] text-white px-3 py-1 text-sm rounded-md')
+            ui.button('Macros ▾', on_click=show_macros_dialog).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
+            ui.button('History ▾', on_click=show_history_dialog).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
+
+        # Command state
+        command_history = []  # list of {'cmd': str, 'timestamp': str}
+        macros = [{'name': 'Scan I2C', 'commands': ['AA', 'BB']}]  # example macros
+
+    def send_command():
+        """Send command to device."""
+        cmd = cmd_input.value
+        if not cmd:
+            return
+        # Record in history
+        ts = datetime.utcnow().strftime('%H:%M:%S')
+        command_history.insert(0, {'cmd': cmd, 'timestamp': ts})
+        if len(command_history) > 100:
+            command_history.pop()
+        # Send to device
+        async def _send():
+            device = device_manager.get_device(selected_device.id)
+            if device and device.serial_conn:
+                try:
+                    device.serial_conn.write((cmd + '\n').encode())
+                    ui.notify(f"Sent: {cmd}", type='positive', timeout=2000)
+                except Exception as e:
+                    ui.notify(f"Send failed: {e}", type='negative')
+            else:
+                ui.notify("Device not connected", type='warning')
+        asyncio.create_task(_send())
+        cmd_input.value = ''
+
+    def show_history_dialog():
+        """Show command history dialog."""
+        dialog = ui.dialog()
+        with dialog, ui.card().classes('p-4 w-96 max-h-80 overflow-y-auto').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+            ui.label('Command History').classes('text-white font-medium mb-3')
+            if not command_history:
+                ui.label('No commands sent yet').classes('text-[#62666d] text-sm py-4')
+            else:
+                with ui.column().classes('w-full gap-1'):
+                    for entry in command_history[:20]:
+                        with ui.row().classes('w-full items-center gap-2 p-2 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.03)]') \
+                            .on('click', lambda e=entry: replay_command(e)):
+                            ui.label(entry['timestamp']).classes('text-[#62666d] text-xs font-mono')
+                            ui.label(entry['cmd']).classes('text-[#d0d6e0] text-sm font-mono flex-1')
+                            ui.label('↗').classes('text-[#7170ff] text-xs')
+
+    def show_macros_dialog():
+        """Show macros management dialog."""
+        dialog = ui.dialog()
+        with dialog, ui.card().classes('p-4 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+            with ui.row().classes('w-full items-center justify-between mb-3'):
+                ui.label('Macros').classes('text-white font-medium')
+                ui.button('+ New', on_click=lambda: show_create_macro_dialog()).classes('bg-[#5e6ad2] text-white px-2 py-0.5 text-xs rounded')
+
+            if not macros:
+                ui.label('No macros defined').classes('text-[#62666d] text-sm py-4')
+            else:
+                with ui.column().classes('w-full gap-1'):
+                    for i, macro in enumerate(macros):
+                        with ui.row().classes('w-full items-center gap-2 p-2 rounded').style('background: rgba(255,255,255,0.01)'):
+                            ui.label(macro['name']).classes('text-[#d0d6e0] text-sm flex-1')
+                            cmd_count = len(macro['commands'])
+                            ui.label(f"{cmd_count} cmds").classes('text-[#62666d] text-xs')
+                            ui.button('▶ Run', on_click=lambda m=macro: run_macro(m)).classes('bg-[#27a644] text-white px-2 py-0.5 text-xs rounded')
+                            ui.button('✕', on_click=lambda idx=i: delete_macro(idx)).classes('text-[#e5484d] text-xs px-1')
+
+    def show_create_macro_dialog():
+        """Dialog to create a new macro."""
+        macro_dialog = ui.dialog()
+        with macro_dialog, ui.card().classes('p-4 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+            ui.label('New Macro').classes('text-white font-medium mb-3')
+            name_input = ui.input('Name', value='My Macro').classes('w-full mb-2').props('outlined').style('color: #d0d6e0')
+            cmds_input = ui.textarea('Commands (one per line)', value='AT\r\nAT+STATUS').classes('w-full mb-3').props('outlined').style('color: #d0d6e0; font-family: monospace')
+            with ui.row().classes('gap-2 justify-end w-full'):
+                ui.button('Cancel', on_click=macro_dialog.close).props('flat').classes('text-[#8a8f98]')
+                ui.button('Create', on_click=lambda: create_macro(name_input.value, cmds_input.value, macro_dialog)).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
+
+    def create_macro(name, commands_text, dialog):
+        """Create a new macro."""
+        commands = [c.strip() for c in commands_text.strip().split('\n') if c.strip()]
+        if not commands:
+            ui.notify('Add at least one command', type='warning')
+            return
+        macros.append({'name': name or 'Unnamed', 'commands': commands})
+        dialog.close()
+        ui.notify(f"Macro '{name}' created with {len(commands)} commands", type='positive')
+
+    def delete_macro(index):
+        """Delete a macro."""
+        if 0 <= index < len(macros):
+            name = macros[index]['name']
+            macros.pop(index)
+            ui.notify(f"Deleted macro '{name}'", type='info')
+
+    async def run_macro(macro):
+        """Execute a macro sequence."""
+        device = device_manager.get_device(selected_device.id)
+        if not device or not device.serial_conn:
+            ui.notify("Device not connected", type='warning')
+            return
+        ui.notify(f"Running macro '{macro['name']}'...", type='info')
+        for cmd in macro['commands']:
+            try:
+                device.serial_conn.write((cmd + '\n').encode())
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                ui.notify(f"Macro failed at '{cmd}': {e}", type='negative')
+                return
+        ui.notify(f"Macro '{macro['name']}' complete", type='positive')
+
+    def replay_command(entry):
+        """Replay a command from history."""
+        cmd_input.value = entry['cmd']
+
+    # Wire up Enter key on command input
+    cmd_input.on('keydown.enter', lambda: send_command())
+
+    # Search & Filter bar
+    with ui.row().classes('w-full gap-2 items-center'):
             search_input = ui.input('Search (Ctrl+F)', placeholder='Type to search...').classes('flex-1').props('outlined dense').style('color: #d0d6e0; font-family: JetBrains Mono, monospace; font-size: 12px')
             search_input.bind_value(terminal_state, 'search')
             case_toggle = ui.checkbox('Case sensitive').classes('text-[#8a8f98] text-xs').bind_value(terminal_state, 'case_sensitive')
@@ -235,16 +357,16 @@ def terminal_page():
             level_select = ui.select(['all', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'metric', 'json'], value='all', label='Filter').classes('w-24').props('outlined dense').bind_value(terminal_state, 'filter_level')
             metric_input = ui.input('Metric', placeholder='e.g. TEMP').classes('w-28').props('outlined dense').bind_value(terminal_state, 'filter_metric')
 
-        # Match navigation bar
-        with ui.row().classes('w-full gap-2 items-center'):
-            match_label = ui.label('No matches').classes('text-[#62666d] text-xs flex-1')
-            ui.button('◀', on_click=lambda: navigate_match(-1)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
-            ui.button('▶', on_click=lambda: navigate_match(1)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
-            ui.button('Clear', on_click=lambda: clear_search()).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
+    # Match navigation bar
+    with ui.row().classes('w-full gap-2 items-center'):
+        match_label = ui.label('No matches').classes('text-[#62666d] text-xs flex-1')
+        ui.button('◀', on_click=lambda: navigate_match(-1)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
+        ui.button('▶', on_click=lambda: navigate_match(1)).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
+        ui.button('Clear', on_click=lambda: clear_search()).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-xs rounded')
 
-        # Log area
-        log_area = ui.column().classes('w-full gap-0 overflow-y-auto') \
-            .style('max-height: 55vh; background: #0f1011; padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); font-family: JetBrains Mono, monospace; font-size: 13px; width: 100%')
+    # Log area
+    log_area = ui.column().classes('w-full gap-0 overflow-y-auto') \
+        .style('max-height: 55vh; background: #0f1011; padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); font-family: JetBrains Mono, monospace; font-size: 13px; width: 100%')
 
     def _apply_search_filter():
         """Apply search and filter to all stored lines, re-render log area."""
