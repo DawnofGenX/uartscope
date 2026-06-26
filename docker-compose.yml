@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8080:8080"
+    environment:
+      - UARTSCOPE_DATABASE_URL=sqlite+aiosqlite:///./data/uartscope.db
+      - UARTSCOPE_MQTT_ENABLED=false
+      - UARTSCOPE_DEBUG=false
+    volumes:
+      - uartscope-data:/app/data
+    restart: unless-stopped
+
+  desktop:
+    build:
+      context: .
+      dockerfile: Dockerfile.desktop
+    ports:
+      - "3000:3000"
+    environment:
+      - API_URL=http://backend:8080
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  uartscope-data:
