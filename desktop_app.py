@@ -399,25 +399,181 @@ def terminal_page():
 
 
 def charts_page():
-    """Live charts — telemetry visualization."""
+    """Live charts — telemetry visualization with custom dashboard builder."""
     global selected_device
 
     if not selected_device:
         ui.label('Select a device from Devices tab to view charts').classes('text-[#62666d]').style('padding: 40px')
         return
 
-    ui.label(f"Live Telemetry — {selected_device.name}").classes('text-[#d0d6e0] font-medium mb-4')
+    # Dashboard state
+    dashboard_state = {
+        'widgets': [],  # list of {id, type, metric, title, size}
+        'edit_mode': False,
+        'next_id': 1,
+    }
 
-    latest = telemetry_engine.get_latest_values(selected_device.id)
-    if latest:
-        with ui.row().classes('w-full gap-3 flex-wrap'):
-            for name, value in latest.items():
-                with ui.card().classes('p-4 min-w-32') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
-                    ui.label(f"{value:.2f}").classes('text-xl font-medium text-white font-mono')
-                    ui.label(name).classes('text-[#8a8f98] text-xs uppercase tracking-wider')
-    else:
-        ui.label('Waiting for telemetry data...').classes('text-[#62666d]')
+    with ui.column().classes('w-full gap-3'):
+        # Header with controls
+        with ui.row().classes('w-full items-center justify-between'):
+            with ui.row().classes('items-center gap-3'):
+                ui.label(f"📊 Dashboard — {selected_device.name}").classes('text-[#d0d6e0] font-medium')
+                ui.button('⊞ Edit', on_click=lambda: toggle_edit()).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-3 py-1 text-sm rounded-md')
+                ui.button('+ Add Widget', on_click=show_add_widget_dialog).classes('bg-[#5e6ad2] text-white px-3 py-1 text-sm rounded-md')
+
+        # Available metrics info
+        latest = telemetry_engine.get_latest_values(selected_device.id)
+        if latest:
+            with ui.row().classes('w-full gap-2 flex-wrap mb-2'):
+                for name, value in latest.items():
+                    ui.label(f"{name}: {value:.2f}").classes('text-[#62666d] text-xs font-mono bg-[rgba(255,255,255,0.02)] px-2 py-0.5 rounded')
+
+        # Dashboard grid
+        dashboard_container = ui.column().classes('w-full gap-3')
+
+    def toggle_edit():
+        dashboard_state['edit_mode'] = not dashboard_state['edit_mode']
+        refresh_dashboard()
+
+    def show_add_widget_dialog():
+        dialog = ui.dialog()
+        with dialog, ui.card().classes('p-6 w-96').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+            ui.label('Add Widget').classes('text-white font-medium mb-4 text-lg')
+            type_select = ui.select(['Metric Card', 'Line Chart', 'Gauge', 'Alert Summary', 'Log Table'], value='Metric Card').classes('w-full mb-3').props('outlined').style('color: #d0d6e0')
+            title_input = ui.input('Title', value='').classes('w-full mb-3').props('outlined').style('color: #d0d6e0')
+            metric_select = ui.select(
+                list(latest.keys()) if latest else ['TEMP'],
+                value=list(latest.keys())[0] if latest else 'TEMP',
+                label='Metric'
+            ).classes('w-full mb-3').props('outlined').style('color: #d0d6e0')
+            size_select = ui.select(['Small', 'Medium', 'Large'], value='Medium').classes('w-full mb-4').props('outlined').style('color: #d0d6e0')
+            with ui.row().classes('gap-2 justify-end w-full'):
+                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#8a8f98]')
+                ui.button('Add', on_click=lambda: add_widget(
+                    type_select.value, title_input.value or f"{metric_select.value}",
+                    metric_select.value, size_select.value, dialog
+                )).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
+
+    def add_widget(widget_type, title, metric, size, dialog):
+        widget = {
+            'id': dashboard_state['next_id'],
+            'type': widget_type,
+            'title': title,
+            'metric': metric,
+            'size': size,
+            'history': [],  # for charts
+        }
+        dashboard_state['next_id'] += 1
+        dashboard_state['widgets'].append(widget)
+        dialog.close()
+        ui.notify(f"Widget '{title}' added", type='positive')
+        refresh_dashboard()
+
+    def remove_widget(widget_id):
+        dashboard_state['widgets'] = [w for w in dashboard_state['widgets'] if w['id'] != widget_id]
+        refresh_dashboard()
+
+    def refresh_dashboard():
+        dashboard_container.clear()
+        widgets = dashboard_state['widgets']
+
+        if not widgets:
+            with dashboard_container:
+                with ui.card().classes('w-full p-8 text-center') \
+                    .style('background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.1)'):
+                    ui.label('◇').classes('text-4xl text-[#23252a] mb-2')
+                    ui.label('No widgets yet').classes('text-[#d0d6e0] font-medium')
+                    ui.label('Click "+ Add Widget" to build your dashboard').classes('text-[#62666d] text-sm')
+            return
+
+        # Render grid
+        with dashboard_container:
+            cols = 2 if widgets else 1
+            for i in range(0, len(widgets), cols):
+                with ui.row().classes('w-full gap-3'):
+                    for widget in widgets[i:i+cols]:
+                        _render_widget(widget)
+
+    def _render_widget(widget):
+        """Render a single dashboard widget."""
+        size_classes = {'Small': 'min-w-36', 'Medium': 'flex-1', 'Large': 'w-full'}
+        size_class = size_classes.get(widget['size'], 'flex-1')
+
+        with ui.card().classes(f'p-4 {size_class}') \
+            .style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+            with ui.row().classes('w-full items-center justify-between mb-2'):
+                ui.label(widget['title']).classes('text-white font-medium text-sm')
+                if dashboard_state['edit_mode']:
+                    ui.button('✕', on_click=lambda w=widget: remove_widget(w['id'])).classes('text-[#e5484d] text-xs px-1')
+
+            # Metric Card
+            if widget['type'] == 'Metric Card':
+                latest = telemetry_engine.get_latest_values(selected_device.id)
+                val = latest.get(widget['metric'], 0)
+                ui.label(f"{val:.2f}").classes('text-2xl font-medium text-white font-mono')
+                ui.label(widget['metric']).classes('text-[#8a8f98] text-xs uppercase tracking-wider')
+
+            # Gauge
+            elif widget['type'] == 'Gauge':
+                latest = telemetry_engine.get_latest_values(selected_device.id)
+                val = latest.get(widget['metric'], 0)
+                # Simple text-based gauge
+                pct = min(100, max(0, (val / 100) * 100))  # assume 0-100 range
+                filled = int(pct / 5)
+                empty = 20 - filled
+                ui.label(f"{val:.1f}").classes('text-xl font-medium text-white font-mono')
+                ui.label('█' * filled + '░' * empty).classes('text-[#7170ff] text-xs font-mono')
+                ui.label(widget['metric']).classes('text-[#8a8f98] text-[10px] uppercase')
+
+            # Line Chart (text-based sparkline)
+            elif widget['type'] == 'Line Chart':
+                history = widget.get('history', [])
+                if len(history) > 1:
+                    chart_vals = history[-20:]
+                    max_v = max(chart_vals) if chart_vals else 1
+                    min_v = min(chart_vals) if chart_vals else 0
+                    range_v = max_v - min_v if max_v != min_v else 1
+                    bars = []
+                    for v in chart_vals:
+                        height = int(((v - min_v) / range_v) * 8) if range_v > 0 else 4
+                        bars.append(' ▁▂▃▄▅▆▇█'[min(height, 8)])
+                    ui.label(''.join(bars)).classes('text-[#27a644] text-lg font-mono leading-none')
+                    ui.label(f"{history[-1]:.2f} ({min_v:.1f}-{max_v:.1f})").classes('text-[#8a8f98] text-xs font-mono')
+                else:
+                    ui.label('Collecting data...').classes('text-[#62666d] text-sm')
+                ui.label(widget['metric']).classes('text-[#8a8f98] text-[10px] uppercase')
+
+            # Alert Summary
+            elif widget['type'] == 'Alert Summary':
+                events = alert_engine.get_alert_history()
+                unack = len([a for a in events if not a.get('acknowledged')])
+                with ui.row().classes('items-center gap-2'):
+                    alert_color = '#e5484d' if unack > 0 else '#27a644'
+                    ui.label(str(unack)).classes('text-xl font-medium').style(f'color: {alert_color}')
+                    ui.label('unacked alerts').classes('text-[#8a8f98] text-xs')
+
+            # Log Table
+            elif widget['type'] == 'Log Table':
+                with ui.column().classes('w-full gap-0.5 max-h-32 overflow-y-auto'):
+                    for ts, line, ltype in terminal_state.get('lines', [])[-5:]:
+                        color = {'error': '#e5484d', 'warn': '#f5a623', 'metric': '#7170ff', 'json': '#27a644'}.get(ltype, '#d0d6e0')
+                        ui.label(f"[{ts}] {line[:50]}").classes('text-xs font-mono').style(f'color: {color}')
+
+    # Background update loop
+    async def dashboard_refresh_loop():
+        while True:
+            await asyncio.sleep(2)
+            # Update chart histories
+            latest = telemetry_engine.get_latest_values(selected_device.id)
+            for widget in dashboard_state['widgets']:
+                if widget['type'] == 'Line Chart' and widget['metric'] in latest:
+                    widget['history'].append(latest[widget['metric']])
+                    if len(widget['history']) > 100:
+                        widget['history'] = widget['history'][-100:]
+            refresh_dashboard()
+
+    asyncio.create_task(dashboard_refresh_loop())
+    refresh_dashboard()
 
 
 def alerts_page():
