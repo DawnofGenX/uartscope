@@ -17,9 +17,12 @@ UARTScope Pro is an open-source platform for monitoring, debugging, and analyzin
 | 📊 **Live Telemetry** | Automatic KEY:VALUE and JSON parsing with real-time charts |
 | 📝 **Session Recording** | Record, replay, and export debugging sessions (JSON/CSV) |
 | 🔔 **Alert Engine** | Rule-based alerts with cooldown, acknowledgment, and WebSocket push notifications |
-| 🧩 **Protocol Decoders** | Plugin architecture: UART, I2C, SPI, CAN Bus, Modbus RTU |
+| 🧩 **Protocol Decoders** | Plugin architecture: UART, I2C, SPI, CAN Bus, Modbus RTU, DBC databases |
 | 📡 **MQTT Integration** | Multi-broker connections, pub/sub, message history, WebSocket bridge |
 | ⚡ **Performance Analytics** | Packet rate, throughput, latency histogram, error tracking |
+| 🧪 **Automated Diff Testing** | Golden session comparison for CI pipelines |
+| 🛒 **Plugin Marketplace** | Browse and install community protocol decoders |
+| 📦 **Session Sharing** | Export and share sessions as `.uartscope` bundles |
 | 💻 **Desktop App** | Pure Python GUI (NiceGUI) — no Node.js or browser required |
 
 ## 🚀 Quick Start
