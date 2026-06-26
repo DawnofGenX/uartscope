@@ -364,6 +364,7 @@ class ProtocolManager:
         self.register(I2CDecoder())
         self.register(SPIDecoder())
         self.register(CANDecoder())
+        self.register(DBCDecoder())
 
     def register(self, decoder: ProtocolDecoder):
         """Register a protocol decoder."""
@@ -409,6 +410,256 @@ class ProtocolManager:
             }
             for d in self._decoders.values()
         ]
+
+
+class DBCDecoder(ProtocolDecoder):
+    """CAN database (.dbc) file decoder — parses DBC files and decodes CAN frames."""
+
+    def __init__(self):
+        self._messages: Dict[int, Dict[str, Any]] = {}  # can_id -> message info
+
+    @property
+    def name(self) -> str:
+        return "CAN DBC"
+
+    @property
+    def protocol_id(self) -> str:
+        return "can_dbc"
+
+    @property
+    def description(self) -> str:
+        return "CAN bus protocol with .dbc database file for signal decoding"
+
+    def can_decode(self, raw_data: bytes) -> float:
+        """Check if data looks like a CAN frame (at least 4 bytes for ID + data)."""
+        if len(raw_data) >= 4:
+            return 0.3
+        return 0.0
+
+    def load_dbc_file(self, filepath: str) -> Dict[str, Any]:
+        """Parse a .dbc file and extract messages and signals."""
+        import re as _re
+
+        messages = {}
+        current_message = None
+        current_signal = None
+
+        try:
+            with open(filepath, 'r', errors='replace') as f:
+                for line in f:
+                    line = line.strip()
+
+                    # Message definition: BO_ 123 MessageName: 8 Vector__XXX
+                    msg_match = self._parse_bo_line(line)
+                    if msg_match:
+                        can_id = msg_match['id']
+                        msg_name = msg_match['name']
+                        msg_len = msg_match['dlc']
+                        messages[can_id] = {
+                            'name': msg_name,
+                            'dlc': msg_len,
+                            'signals': [],
+                            'id_hex': f"0x{can_id:03X}",
+                        }
+                        current_message = messages[can_id]
+                        current_signal = None
+                        continue
+
+                    # Signal definition: SG_ SignalName : 0|8@1+ (1,0) [0|255] "" Vector__XXX
+                    sig_match = self._parse_sg_line(line)
+                    if sig_match and current_message is not None:
+                        current_message['signals'].append(sig_match)
+                        current_signal = sig_match
+                        continue
+        except FileNotFoundError:
+            return {'error': f'File not found: {filepath}'}
+        except Exception as e:
+            return {'error': f'Parse error: {str(e)}'}
+
+        self._messages = messages
+        return {
+            'messages': len(messages),
+            'total_signals': sum(len(m['signals']) for m in messages.values()),
+            'message_ids': [f"0x{mid:03X}" for mid in messages.keys()],
+        }
+
+    def load_dbc_text(self, dbc_content: str) -> Dict[str, Any]:
+        """Parse DBC content from a string."""
+        import re as _re
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.dbc', delete=False) as f:
+            f.write(dbc_content)
+            f.flush()
+            result = self.load_dbc_file(f.name)
+
+        import os
+        try:
+            os.unlink(f.name)
+        except:
+            pass
+
+        return result
+
+    def _parse_bo_line(self, line: str) -> Optional[Dict]:
+        """Parse a BO_ (message/object) line."""
+        import re as _re
+        # BO_ 123 MSG_NAME: 8 Vector__XXX
+        pattern = r'^BO_\s+(\d+)\s+(\w+)\s*:\s*(\d+)\s+(.+)$'
+        m = _re.match(pattern, line)
+        if m:
+            return {
+                'id': int(m.group(1)),
+                'name': m.group(2),
+                'dlc': int(m.group(3)),
+                'transmitter': m.group(4).strip(),
+            }
+        return None
+
+    def _parse_sg_line(self, line: str) -> Optional[Dict]:
+        """Parse a SG_ (signal) line."""
+        import re as _re
+        # SG_ SignalName : start|length@endian (factor,offset) [min|max] "unit" receiver1,...
+        pattern = r'^SG_\s+(\w+)\s*:\s*(\d+)\|(\d+)([@]\s*[01 UL]+)\s*\(\s*([-0-9eE.+-]+)\s*,\s*([-0-9eE.+-]+)\s*\)\s*\[\s*([-0-9eE.+-]*)\s*\|\s*([-0-9eE.+-]*)\s*\]\s*"([^"]*)"'
+        pattern_simple = r'^SG_\s+(\w+)\s*:\s*(\d+)\|(\d+)'
+
+        m = _re.match(pattern, line)
+        if not m:
+            # Try simpler pattern
+            m = _re.match(pattern_simple, line)
+            if m:
+                return {
+                    'name': m.group(1),
+                    'start': int(m.group(2)),
+                    'length': int(m.group(3)),
+                    'endian': 'little',
+                    'factor': 1.0,
+                    'offset': 0.0,
+                    'min': 0.0,
+                    'max': 0.0,
+                    'unit': '',
+                }
+            return None
+        if m:
+            # DBC endian: @0 = Intel (little-endian), @1 = Motorola (big-endian)
+            endian_str = m.group(3)
+            is_big = '@1' in endian_str or '1@' in endian_str
+            factor = float(m.group(4).replace('ё', '-'))
+            offset = float(m.group(5).replace('ё', '-'))
+            min_val = float(m.group(6).replace('ё', '-')) if m.group(6) else 0.0
+            max_val = float(m.group(7).replace('ё', '-')) if m.group(7) else 0.0
+
+            return {
+                'name': m.group(1),
+                'start': int(m.group(2)),
+                'length': int(m.group(3)),
+                'endian': 'big' if is_big else 'little',
+            'factor': factor,
+            'offset': offset,
+            'min': min_val,
+            'max': max_val,
+            'unit': m.group(8),
+        }
+
+    def decode(self, raw_data: bytes) -> Dict[str, Any]:
+        """Decode a CAN frame using loaded DBC data."""
+        if len(raw_data) < 4:
+            return {'type': 'can_dbc', 'error': 'Frame too short', 'raw': raw_data.hex()}
+
+        # Assume first 4 bytes are CAN ID (big-endian 29-bit or 11-bit)
+        can_id = int.from_bytes(raw_data[:4], byteorder='big') & 0x1FFFFFFF
+        data_bytes = raw_data[4:]
+
+        msg = self._messages.get(can_id)
+        if not msg:
+            return {
+                'type': 'can_dbc',
+                'can_id': f'0x{can_id:03X}',
+                'unknown': True,
+                'dlc': len(data_bytes),
+                'raw_data': data_bytes.hex(),
+            }
+
+        # Decode signals
+        decoded_signals = []
+        for signal in msg['signals']:
+            try:
+                value = self._extract_signal(data_bytes, signal)
+                physical_value = value * signal['factor'] + signal['offset']
+                decoded_signals.append({
+                    'name': signal['name'],
+                    'raw_value': value,
+                    'physical_value': round(physical_value, 4),
+                    'unit': signal['unit'],
+                    'min': signal['min'],
+                    'max': signal['max'],
+                })
+            except Exception as e:
+                decoded_signals.append({
+                    'name': signal['name'],
+                    'error': str(e),
+                })
+
+        return {
+            'type': 'can_dbc',
+            'can_id': f'0x{can_id:03X}',
+            'message': msg['name'],
+            'dlc': len(data_bytes),
+            'signals': decoded_signals,
+            'raw_data': data_bytes.hex(),
+        }
+
+    def _extract_signal(self, data: bytes, signal: Dict) -> int:
+        """Extract a signal value from CAN data bytes."""
+        start = signal['start']
+        length = signal['length']
+        endian = signal.get('endian', 'little')
+
+        # CAN data is up to 8 bytes
+        if start // 8 >= len(data):
+            return 0
+
+        # Multi-byte signals (length > 8)
+        if length > 8:
+            start_byte = start // 8
+            num_bytes = (length + 7) // 8
+            if start_byte + num_bytes > len(data):
+                return 0
+
+            if endian == 'big':
+                val = int.from_bytes(data[start_byte:start_byte + num_bytes], byteorder='big')
+            else:
+                val = int.from_bytes(data[start_byte:start_byte + num_bytes], byteorder='little')
+            return val
+
+        # Single byte or partial
+        byte_idx = start // 8
+        bit_offset = start % 8
+        if byte_idx < len(data):
+            val = data[byte_idx]
+            # Mask to length bits from bit_offset
+            mask = (1 << length) - 1
+            if bit_offset + length <= 8:
+                val = (val >> (8 - bit_offset - length)) & mask
+            return val
+        return 0
+
+    def encode(self, data: Dict[str, Any]) -> bytes:
+        """Encode a CAN frame from structured data."""
+        can_id = data.get('can_id', 0)
+        if isinstance(can_id, str):
+            can_id = int(can_id, 16)
+
+        # Build CAN data bytes from signals
+        data_bytes = bytearray(8)
+        for sig in data.get('signals', []):
+            byte_idx = sig.get('start', 0) // 8
+            if byte_idx < 8:
+                val = sig.get('value', 0)
+                if byte_idx < 8:
+                    data_bytes[byte_idx] = val & 0xFF
+
+        return can_id.to_bytes(4, byteorder='big') + bytes(data_bytes)
 
 
 # Singleton

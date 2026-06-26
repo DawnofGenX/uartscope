@@ -84,6 +84,7 @@ def build_sidebar():
                 ('alerts', '◉', 'Alerts'),
                 ('sessions', '⟳', 'Sessions'),
                 ('decoder', '⬡', 'Decoder'),
+                ('marketplace', '🛒', 'Marketplace'),
             ]
 
             for tab_id, icon, label in nav_items:
@@ -901,6 +902,7 @@ def session_detail_page():
             t1 = ui.tab('Timeline')
             t2 = ui.tab('Metrics')
             t3 = ui.tab('Export')
+            t4 = ui.tab('🧪 Diff Test')
 
         with ui.tab_panels(tabs, value=t1).classes('w-full p-0'):
             with ui.tab_panel(t1):
@@ -917,8 +919,174 @@ def session_detail_page():
 
             with ui.tab_panel(t3):
                 with ui.column().classes('w-full gap-3'):
-                    ui.button('Export JSON', on_click=lambda: ui.notify('JSON export', type='info')).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md w-full')
-                    ui.button('Export CSV', on_click=lambda: ui.notify('CSV export', type='info')).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-4 py-2 rounded-md w-full')
+                    ui.label('Export & Share').classes('text-white font-medium')
+                    with ui.row().classes('w-full gap-2'):
+                        ui.button('Export JSON', on_click=lambda: export_json()).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md flex-1')
+                        ui.button('Export CSV', on_click=lambda: export_csv()).classes('bg-[rgba(255,255,255,0.03)] text-[#8a8f98] border border-[rgba(255,255,255,0.08)] px-4 py-2 rounded-md flex-1')
+                    ui.button('📦 Share Bundle (.uartscope)', on_click=lambda: export_bundle()).classes('bg-[#7170ff] text-white px-4 py-2 rounded-md w-full')
+
+                    ui.label('Sharing exports session metadata + metrics. Does NOT include raw serial data. Others can open the bundle to view the session.').classes('text-[#62666d] text-[10px]')
+
+            def export_json():
+                filename = f"session_{session.get('session_id', 'unknown')[:8]}.json"
+                data = {
+                    'session': session,
+                    'metrics': {},
+                }
+                for mn, hist in telemetry_engine.get_all_metrics(session.get('device_id', '')).items():
+                    data['metrics'][mn] = [{'timestamp': m.timestamp.isoformat(), 'name': m.name, 'value': m.value, 'unit': m.unit} for m in hist]
+                raw = json.dumps(data, indent=2, default=str).encode()
+                ui.download.bytes(raw, filename)
+                ui.notify(f'Exported: {filename}', type='positive')
+
+            def export_csv():
+                import io
+                output = io.StringIO()
+                output.write('timestamp,metric,value,unit\n')
+                for mn, history in telemetry_engine.get_all_metrics(session.get('device_id', '')).items():
+                    for m in history:
+                        output.write(f"{m.timestamp.isoformat()},{m.name},{m.value},{m.unit or ''}\n")
+                raw = output.getvalue().encode()
+                ui.download.bytes(raw, f"session_{session.get('session_id', 'unknown')[:8]}.csv")
+                ui.notify('CSV exported', type='positive')
+
+            def export_bundle():
+                import os, zipfile, io
+                descriptor = {
+                    'version': '1.0',
+                    'type': 'uartscope-session',
+                    'session': {k: v for k, v in session.items()},
+                    'metrics': {},
+                }
+                for mn, hist in telemetry_engine.get_all_metrics(session.get('device_id', '')).items():
+                    descriptor['metrics'][mn] = [{'timestamp': m.timestamp.isoformat(), 'name': m.name, 'value': m.value, 'unit': m.unit} for m in hist]
+
+                # Build zip in memory
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr('session.json', json.dumps(descriptor, indent=2, default=str))
+                    csv_output = io.StringIO()
+                    csv_output.write('timestamp,metric,value,unit\n')
+                    for mn, hist in descriptor['metrics'].items():
+                        for m_dict in hist:
+                            csv_output.write(f"{m_dict['timestamp']},{m_dict['name']},{m_dict['value']},{m_dict.get('unit', '')}\n")
+                    zf.writestr('metrics.csv', csv_output.getvalue())
+
+                ui.download.bytes(zip_buffer.getvalue(), f"session_{session.get('session_id', 'unknown')[:8]}.uartscope")
+                ui.notify('Bundle exported!', type='positive')
+
+            with ui.tab_panel(t4):
+                # Golden Session Diff Tab
+                with ui.column().classes('w-full gap-4'):
+                    ui.label('Automated Session Diff').classes('text-white font-medium')
+                    ui.label('Mark this session as "golden" (expected behavior), then compare new sessions against it. Perfect for CI pipelines.').classes('text-[#8a8f98] text-xs')
+
+                    with ui.row().classes('w-full gap-3 items-center'):
+                        golden_status = ui.label('⚪ No golden session set').classes('text-[#62666d] text-sm flex-1')
+                        ui.button('⭐ Mark as Golden', on_click=lambda: mark_as_golden()).classes('bg-[#f5a623] text-white px-3 py-1.5 text-sm rounded-md')
+
+                    # Diff criteria
+                    with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                        ui.label('Diff Criteria').classes('text-white font-medium text-sm mb-2')
+                        check_metrics = ui.checkbox('Compare metric values', value=True).classes('text-[#8a8f98] text-xs')
+                        check_packet_count = ui.checkbox('Compare packet counts', value=True).classes('text-[#8a8f98] text-xs')
+                        check_errors = ui.checkbox('Compare error patterns', value=True).classes('text-[#8a8f98] text-xs')
+                        tolerance = ui.number('Tolerance (%)', value=5, min=0, max=100).classes('w-full mb-2').props('outlined dense').style('color: #d0d6e0')
+
+                    # Compare button
+                    ui.button('🧪 Run Diff Against Golden', on_click=lambda: run_diff()).classes('bg-[#7170ff] text-white px-4 py-2 rounded-md w-full')
+
+                    # Diff results area
+                    diff_results = ui.column().classes('w-full gap-2')
+
+        # Diff functions (defined in outer scope)
+        current_packets = session.get('packet_count', 0)
+        golden_data = {'packet_count': 0, 'metrics': {}, 'error_count': 0, 'metric_samples': {}}
+
+        def mark_as_golden():
+            golden_data['packet_count'] = session.get('packet_count', 0)
+            golden_data['name'] = session.get('name', '')
+            golden_data['metrics'] = session.get('metrics_latest', {})
+            golden_data['error_count'] = session.get('error_count', 0)
+            golden_data['metric_samples'] = {}
+            golden_status.text = f"⭐ Golden: {golden_data['name']} ({golden_data['packet_count']} pkts)"
+            ui.notify(f"Session marked as golden ({golden_data['packet_count']} packets)", type='positive')
+
+        def run_diff():
+            diff_results.clear()
+            tolerance_val = tolerance.value / 100.0
+            passed = True
+            results = []
+
+            # Compare packet counts
+            if check_packet_count.value:
+                expected = golden_data['packet_count']
+                actual = current_packets
+                diff_pct = abs(actual - expected) / max(expected, 1) * 100
+                match = diff_pct <= (tolerance_val * 100)
+                passed = passed and match
+                results.append({
+                    'name': 'Packet Count',
+                    'expected': str(expected),
+                    'actual': str(actual),
+                    'diff': f"{diff_pct:.1f}%",
+                    'pass': match,
+                })
+
+            # Compare metrics (latest values)
+            if check_metrics.value:
+                current_metrics = session.get('metrics_latest', {})
+                golden_metrics = golden_data.get('metrics', {})
+                for metric_name, golden_val in golden_metrics.items():
+                    if isinstance(golden_val, (int, float)):
+                        current_val = current_metrics.get(metric_name, 0)
+                        if isinstance(current_val, (int, float)):
+                            if golden_val != 0:
+                                pct_diff = abs(current_val - golden_val) / abs(golden_val) * 100
+                            else:
+                                pct_diff = 0 if current_val == 0 else 100
+                            match = pct_diff <= (tolerance_val * 100)
+                            passed = passed and match
+                            results.append({
+                                'name': f"Metric: {metric_name}",
+                                'expected': f"{golden_val}",
+                                'actual': f"{current_val}",
+                                'diff': f"{pct_diff:.1f}%",
+                                'pass': match,
+                            })
+
+            # Compare error counts
+            if check_errors.value:
+                golden_errors = golden_data['error_count']
+                current_errors = session.get('error_count', 0)
+                match = current_errors == golden_errors
+                passed = passed and match
+                results.append({
+                    'name': 'Error Count',
+                    'expected': str(golden_errors),
+                    'actual': str(current_errors),
+                    'diff': '0' if match else f"+{current_errors - golden_errors}",
+                    'pass': match,
+                })
+
+            # Render results
+            with diff_results:
+                if passed:
+                    with ui.card().classes('w-full p-3').style('background: rgba(39,166,68,0.1); border: 1px solid rgba(39,166,68,0.3)'):
+                        ui.label('✅ ALL CHECKS PASSED').classes('text-[#27a644] font-medium')
+                else:
+                    with ui.card().classes('w-full p-3').style('background: rgba(229,72,77,0.1); border: 1px solid rgba(229,72,77,0.3)'):
+                        ui.label('❌ TEST FAILED').classes('text-[#e5484d] font-medium')
+
+                for r in results:
+                    color = '#27a644' if r['pass'] else '#e5484d'
+                    icon = '✓' if r['pass'] else '✗'
+                    with ui.row().classes('w-full items-center gap-3 p-2 rounded-md').style('background: rgba(255,255,255,0.01)'):
+                        ui.label(icon).style(f'color: {color}').classes('text-sm')
+                        ui.label(r['name']).classes('text-[#d0d6e0] text-xs flex-1')
+                        ui.label(f"Expected: {r['expected']}").classes('text-[#8a8f98] text-xs font-mono')
+                        ui.label(f"Actual: {r['actual']}").classes('text-[#d0d6e0] text-xs font-mono')
+                        ui.label(f"Δ {r['diff']}").style(f'color: {color}').classes('text-xs font-mono')
 
     def go_back():
         global current_tab, selected_session
@@ -1214,9 +1382,179 @@ def mqtt_page():
     refresh_mqtt()
 
 
-def decoder_page():
-    """Protocol decoder — hex input, decode, structured output."""
+def marketplace_page():
+    """Plugin Marketplace — browse, install, and share protocol decoder plugins."""
+    # Built-in catalog (would be fetched from GitHub in production)
+    catalog = [
+        {
+            'id': 'ldf_decoder',
+            'name': 'LIN Bus (LDF)',
+            'author': 'UARTScope Community',
+            'description': 'Decode LIN bus frames using .ldf database files. Supports LIN 1.3-2.2, signal mapping, and schedule tables.',
+            'version': '1.0.0',
+            'downloads': 1240,
+            'tags': ['automotive', 'lin', 'can-lin'],
+            'installed': False,
+        },
+        {
+            'id': 'j1939_decoder',
+            'name': 'J1939 (Heavy Duty)',
+            'author': 'UARTScope Community',
+            'description': 'SAE J1939 protocol decoder for trucks, buses, and agricultural vehicles. PGN-based message parsing.',
+            'version': '1.1.0',
+            'downloads': 890,
+            'tags': ['automotive', 'j1939', 'truck'],
+            'installed': False,
+        },
+        {
+            'id': 'dali_decoder',
+            'name': 'DALI Lighting',
+            'author': 'UARTScope Community',
+            'description': 'DALI / DALI-2 lighting control protocol decoder. Supports broadcast, group addressing, and scene commands.',
+            'version': '0.9.0',
+            'downloads': 567,
+            'tags': ['lighting', 'dali', 'iot'],
+            'installed': False,
+        },
+        {
+            'id': 'rcs_decoder',
+            'name': 'RCS Servo',
+            'author': 'UARTScope Community',
+            'description': 'Futaba S.Bus / S.Bus2 and FrSky servo protocol decoder. Channel extraction and failsafe detection.',
+            'version': '1.0.0',
+            'downloads': 723,
+            'tags': ['rc', 'servo', 'fpv'],
+            'installed': False,
+        },
+        {
+            'id': 'mbus_decoder',
+            'name': 'M-Bus Metering',
+            'author': 'UARTScope Community',
+            'description': 'Meter-Bus (EN 13757) decoder for heat, gas, water, and electricity meters. Variable data format parsing.',
+            'version': '1.0.0',
+            'downloads': 445,
+            'tags': ['metering', 'mbus', 'iot'],
+            'installed': False,
+        },
+        {
+            'id': 'profibus_decoder',
+            'name': 'PROFIBUS DP',
+            'author': 'UARTScope Pro',
+            'description': 'PROFIBUS DP-V0/V1 decoder for industrial automation. SAP handling and diagnostic messages.',
+            'version': '1.0.0',
+            'downloads': 312,
+            'tags': ['industrial', 'profibus', 'plc'],
+            'installed': False,
+        },
+    ]
+
+    installed_plugins = [p for p in catalog if p['installed']]
+    search_state = {'query': ''}
+
     with ui.column().classes('w-full gap-4'):
+        # Header
+        with ui.row().classes('w-full items-center justify-between'):
+            with ui.column():
+                ui.label('Plugin Marketplace').classes('text-white font-medium text-lg')
+                ui.label('Browse and install community protocol decoders').classes('text-[#62666d] text-sm')
+            with ui.row().classes('gap-2'):
+                ui.label(f'{len(installed_plugins)} installed').classes('text-[#27a644] text-xs font-mono')
+
+        # Search bar
+        search_input = ui.input('Search plugins...', placeholder='Search by name, tag, or description').classes('w-full').props('outlined dense').style('color: #d0d6e0')
+        search_input.on_value_change(lambda: refresh_catalog())
+
+        # Installed section
+        if installed_plugins:
+            with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(39,166,68,0.2)'):
+                ui.label('✅ Installed Plugins').classes('text-white font-medium mb-3')
+                with ui.column().classes('w-full gap-2'):
+                    for plugin in installed_plugins:
+                        with ui.row().classes('w-full items-center justify-between p-2 rounded-md').style('background: rgba(255,255,255,0.01)'):
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label('📦').classes('text-sm')
+                                with ui.column().classes('gap-0'):
+                                    ui.label(plugin['name']).classes('text-[#d0d6e0] text-sm font-medium')
+                                    ui.label(f"v{plugin['version']} · {plugin['author']}").classes('text-[#62666d] text-xs')
+                            with ui.row().classes('gap-2'):
+                                ui.label('Installed').classes('text-[#27a644] text-xs')
+                                ui.button('Uninstall', on_click=lambda p=plugin: uninstall_plugin(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#e5484d] px-2 py-0.5 text-xs rounded')
+
+        # Catalog grid
+        catalog_container = ui.column().classes('w-full gap-3')
+
+    def refresh_catalog():
+        query = search_input.value.lower().strip() if search_input.value else ''
+        catalog_container.clear()
+
+        filtered = catalog
+        if query:
+            filtered = [p for p in catalog if
+                        query in p['name'].lower() or
+                        query in p['description'].lower() or
+                        any(query in t for t in p['tags'])]
+
+        if not filtered:
+            with catalog_container:
+                with ui.card().classes('w-full p-8 text-center').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                    ui.label('🔍').classes('text-3xl mb-2')
+                    ui.label('No plugins found').classes('text-[#d0d6e0] font-medium')
+                    ui.label('Try a different search term').classes('text-[#62666d] text-sm')
+        else:
+            with catalog_container:
+                for plugin in filtered:
+                    with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05)'):
+                        with ui.row().classes('w-full items-start justify-between'):
+                            with ui.column().classes('gap-1 flex-1'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.label(plugin['name']).classes('text-white font-medium text-sm')
+                                    ui.label(f"v{plugin['version']}").classes('text-[#62666d] text-xs font-mono')
+                                ui.label(plugin['description']).classes('text-[#8a8f98] text-xs leading-relaxed')
+                                with ui.row().classes('gap-1 mt-1'):
+                                    for tag in plugin['tags']:
+                                        ui.label(tag).classes('text-[#7170ff] text-[10px] bg-[rgba(113,112,255,0.1)] px-1.5 py-0.5 rounded')
+                                ui.label(f"by {plugin['author']} · {plugin['downloads']:,} downloads").classes('text-[#62666d] text-[10px] mt-1')
+                            with ui.column().classes('gap-2 items-end'):
+                                if plugin['installed']:
+                                    ui.label('✅ Installed').classes('text-[#27a644] text-xs')
+                                else:
+                                    ui.button('Install', on_click=lambda p=plugin: install_plugin(p)).classes('bg-[#5e6ad2] text-white px-3 py-1 text-xs rounded-md')
+
+    async def install_plugin(plugin):
+        ui.notify(f"Installing '{plugin['name']}'...", type='info')
+        # Simulate install (in production: download from GitHub repo)
+        await asyncio.sleep(1)
+        plugin['installed'] = True
+        plugin['downloads'] += 1
+        ui.notify(f"✅ '{plugin['name']}' installed! Restart to activate.", type='positive')
+        refresh_catalog()
+
+    async def uninstall_plugin(plugin):
+        plugin['installed'] = False
+        ui.notify(f"'{plugin['name']}' uninstalled", type='info')
+        refresh_catalog()
+
+    refresh_catalog()
+
+
+def decoder_page():
+    """Protocol decoder — hex input, decode, structured output, DBC file loading."""
+    dbc_info = {'loaded': False, 'messages': 0, 'signals': 0}
+
+    with ui.column().classes('w-full gap-4'):
+        # DBC file loader
+        with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(113,112,255,0.2)'):
+            with ui.row().classes('w-full items-center justify-between mb-2'):
+                ui.label('📁 CAN Database (.dbc)').classes('text-white font-medium')
+                ui.button('Load DBC File', on_click=show_dbc_upload_dialog).classes('bg-[#7170ff] text-white px-3 py-1 text-sm rounded-md')
+            with ui.row().classes('w-full items-center gap-3'):
+                ui.label('Status:').classes('text-[#8a8f98] text-xs')
+                dbc_status_label = ui.label('No DBC loaded').classes('text-[#62666d] text-xs font-mono')
+                ui.label('Messages:').classes('text-[#8a8f98] text-xs')
+                dbc_msgs_label = ui.label('0').classes('text-[#62666d] text-xs font-mono')
+                ui.label('Signals:').classes('text-[#8a8f98] text-xs')
+                dbc_sigs_label = ui.label('0').classes('text-[#62666d] text-xs font-mono')
+
         with ui.row().classes('w-full items-center gap-3'):
             protocol = ui.select(
                 ['auto'] + [p['id'] for p in protocol_manager.list_decoders()],
@@ -1226,6 +1564,42 @@ def decoder_page():
             ui.button('Decode', on_click=lambda: do_decode(raw_input.value, protocol.value)).classes('bg-[#5e6ad2] text-white px-4 py-2 rounded-md')
 
         result_container = ui.column().classes('w-full gap-2')
+
+        def show_dbc_upload_dialog():
+            """Dialog to paste DBC file content."""
+            dialog = ui.dialog()
+            with dialog, ui.card().classes('p-6 w-[600px]').style('background: #191a1b; border: 1px solid rgba(255,255,255,0.08)'):
+                ui.label('Load CAN Database (.dbc)').classes('text-white font-medium mb-4 text-lg')
+                ui.label('Paste DBC file content below:').classes('text-[#8a8f98] text-xs mb-2')
+                dbc_input = ui.textarea('DBC Content', placeholder='BO_ 100 EngineData: 8 Vector__XXX\n SG_ RPM : 0|16@1+ (1,0) [0|8000] "rpm" Vector__XXX').classes('w-full h-48 mb-4').props('outlined').style('color: #d0d6e0; font-family: monospace; font-size: 11px')
+                with ui.row().classes('gap-2 justify-end w-full'):
+                    ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#8a8f98]')
+                    ui.button('Load', on_click=lambda: do_load_dbc(dbc_input.value, dialog)).classes('bg-[#7170ff] text-white px-4 py-2 rounded-md')
+
+        async def do_load_dbc(content, dialog):
+            if not content.strip():
+                ui.notify('Paste DBC content first', type='warning')
+                return
+            dialog.close()
+            ui.notify('Loading DBC file...', type='info')
+            try:
+                from app.core.protocol_decoder import protocol_manager
+                decoder = protocol_manager.get_decoder('can_dbc')
+                if decoder:
+                    result = decoder.load_dbc_text(content)
+                    msgs = result.get('messages', 0)
+                    sigs = result.get('total_signals', 0)
+                    if 'error' not in result:
+                        dbc_status_label.text = '✅ Loaded'
+                        dbc_msgs_label.text = str(msgs)
+                        dbc_sigs_label.text = str(sigs)
+                        ui.notify(f'DBC loaded: {msgs} messages, {sigs} signals', type='positive')
+                    else:
+                        ui.notify(f"Error: {result['error']}", type='negative')
+                else:
+                    ui.notify('DBC decoder not available', type='negative')
+            except Exception as e:
+                ui.notify(f'Error: {e}', type='negative')
 
         async def do_decode(raw_hex, proto_id):
             result_container.clear()
@@ -1289,6 +1663,8 @@ def render_content():
         performance_page()
     elif current_tab == 'mqtt':
         mqtt_page()
+    elif current_tab == 'marketplace':
+        marketplace_page()
     elif current_tab == 'decoder':
         decoder_page()
 

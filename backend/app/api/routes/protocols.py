@@ -62,3 +62,44 @@ async def encode_data(body: dict):
         "raw_hex": raw_bytes.hex(),
         "length": len(raw_bytes),
     }
+
+
+@router.post("/dbc/load")
+async def load_dbc_file(body: dict):
+    """Load DBC/LDF file content and parse message definitions."""
+    content = body.get("content", "")
+    filename = body.get("filename", "unnamed.dbc")
+
+    if not content:
+        raise HTTPException(status_code=400, detail="File content required")
+
+    decoder = protocol_manager.get_decoder("can_dbc")
+    if not decoder:
+        raise HTTPException(status_code=500, detail="DBC decoder not available")
+
+    if filename.endswith(".ldf"):
+        result = {"message": "LDF format not yet implemented", "signals": [], "messages": []}
+    else:
+        result = decoder.load_dbc_text(content)
+
+    return {"success": True, "filename": filename, "result": result}
+
+
+@router.get("/dbc/loaded")
+async def get_loaded_dbc_info():
+    """Get information about currently loaded DBC data."""
+    decoder = protocol_manager.get_decoder("can_dbc")
+    if not decoder:
+        raise HTTPException(status_code=500, detail="DBC decoder not available")
+
+    if not decoder._messages:
+        return {"loaded": False, "messages": 0, "signals": 0}
+
+    total_signals = sum(len(m['signals']) for m in decoder._messages.values())
+    return {
+        "loaded": True,
+        "messages": len(decoder._messages),
+        "total_signals": total_signals,
+        "message_ids": [f"0x{mid:03X}" for mid in decoder._messages.keys()],
+        "message_names": {f"0x{mid:03X}": m['name'] for mid, m in decoder._messages.items()},
+    }
