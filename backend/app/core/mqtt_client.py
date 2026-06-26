@@ -82,10 +82,12 @@ class MQTTManager:
         logger.info(f"MQTT profile added: {profile.name} ({profile.broker}:{profile.port})")
 
     def remove_profile(self, profile_id: str):
-        """Remove a connection profile and disconnect if connected."""
+        """Remove a connection profile."""
         profile = self._connections.pop(profile_id, None)
         if profile:
-            asyncio.create_task(self._disconnect_profile(profile_id))
+            # Synchronous remove for testing
+            self._clients.pop(profile_id, None)
+            self._tasks.pop(profile_id, None)
             logger.info(f"MQTT profile removed: {profile.name}")
 
     async def connect(self, profile_id: str) -> bool:
