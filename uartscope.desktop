@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=UARTScope Pro
+Comment=Embedded Telemetry & Debugging Platform
+Exec=/home/pi/uartscope/uartscope
+Icon=/home/pi/uartscope/icon.png
+Terminal=false
+Type=Application
+Categories=Development;Electronics;
+StartupNotify=true
