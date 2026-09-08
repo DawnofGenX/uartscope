@@ -30,8 +30,8 @@ UARTScope Pro is an open-source platform for monitoring, debugging, and analyzin
 ### Option A: Desktop App (Recommended)
 
 ```bash
-git clone https://github.com/yourusername/uartscope-pro.git
-cd uartscope-pro
+git clone https://github.com/DawnofGenX/uartscope.git
+cd uartscope
 
 # Backend
 cd backend
