@@ -9,6 +9,17 @@ from app.core.telemetry_engine import Metric
 
 logger = logging.getLogger(__name__)
 
+# The UI's condition picker and any API client speak in symbols; the engine
+# reasons in names. Every value the product can actually produce is listed here,
+# so a condition the app offers can never be one the engine silently ignores.
+_CONDITION_ALIASES = {
+    ">": "gt", "<": "lt", "==": "eq", "=": "eq",
+    ">=": "gte", "<=": "lte",
+    "gt": "gt", "lt": "lt", "eq": "eq",
+    "gte": "gte", "lte": "lte",
+    "range": "range", "change": "change",
+}
+
 
 class AlertRule:
     def __init__(self, id: str, name: str, metric_name: str, condition: str,
@@ -39,21 +50,26 @@ class AlertRule:
                 return False
 
         triggered = False
-        if self.condition == "gt":
+        # The UI and the API both speak in symbols (>, <, >=, <=, ==); the
+        # internal names are gt/lt/gte/lte/eq. Normalise here rather than at
+        # every call site, because a rule silently never firing is the worst
+        # possible failure for an alerting system: it looks configured.
+        cond = _CONDITION_ALIASES.get(self.condition, self.condition)
+        if cond == "gt":
             triggered = value > self.threshold
-        elif self.condition == "lt":
+        elif cond == "lt":
             triggered = value < self.threshold
-        elif self.condition == "eq":
+        elif cond == "eq":
             triggered = abs(value - self.threshold) < 0.001
-        elif self.condition == "gte":
+        elif cond == "gte":
             triggered = value >= self.threshold
-        elif self.condition == "lte":
+        elif cond == "lte":
             triggered = value <= self.threshold
-        elif self.condition == "range":
+        elif cond == "range":
             low = self.threshold
             high = self.secondary_threshold if self.secondary_threshold is not None else self.threshold
             triggered = not (low <= value <= high)
-        elif self.condition == "change":
+        elif cond == "change":
             # Trigger on any change exceeding threshold (delta)
             if self.last_value is not None:
                 delta = abs(value - self.last_value)
@@ -62,6 +78,14 @@ class AlertRule:
                 triggered = delta >= min_delta
             else:
                 triggered = False
+        else:
+            # An unrecognised condition must be loud, not silent. Previously it
+            # fell through every branch and returned False, so a typo produced a
+            # rule that could never fire and reported nothing.
+            logger.warning(
+                "alert rule %r has unrecognised condition %r; it will never fire",
+                self.name, self.condition)
+            return False
 
         self.last_value = value
 
