@@ -29,5 +29,9 @@ Thumbs.db
 sessions/
 uartscope.db
 
+# Hermes planning artifacts. Local working notes and one-shot migration
+# scripts, not part of the product.
+.hermes/
+
 # Logs
 *.log
