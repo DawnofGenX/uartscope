@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
 
 from nicegui import ui, app
 
+from uartscope_theme import inject_theme_css
+
 from app.core.device_manager import device_manager
 from app.core.telemetry_engine import telemetry_engine
 from app.core.session_recorder import session_recorder
@@ -1677,6 +1679,10 @@ def switch_tab(tab_id):
 @ui.page('/')
 def main_page():
     global content_container
+
+    # v2 design system: tokens + Inter/JetBrains Mono. Must run before any
+    # screen is built so the first paint is already themed.
+    inject_theme_css(ui)
 
     # Background data refresh
     async def bg_refresh():
