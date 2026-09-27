@@ -1840,7 +1840,7 @@ def session_detail_page():
                     ui.label('Sharing exports session metadata + metrics. Does NOT include raw serial data. Others can open the bundle to view the session.').classes('text-[#52525b] text-[10px]')
 
             def export_json():
-                filename = f"session_{session.get('session_id', 'unknown')[:8]}.json"
+                filename = f"session_{session.get('id', 'unknown')[:8]}.json"
                 data = {
                     'session': session,
                     'metrics': {},
@@ -1859,7 +1859,7 @@ def session_detail_page():
                     for m in history:
                         output.write(f"{m.timestamp.isoformat()},{m.name},{m.value},{m.unit or ''}\n")
                 raw = output.getvalue().encode()
-                ui.download.bytes(raw, f"session_{session.get('session_id', 'unknown')[:8]}.csv")
+                ui.download.bytes(raw, f"session_{session.get('id', 'unknown')[:8]}.csv")
                 ui.notify('CSV exported', type='positive')
 
             def export_bundle():
@@ -1884,7 +1884,7 @@ def session_detail_page():
                             csv_output.write(f"{m_dict['timestamp']},{m_dict['name']},{m_dict['value']},{m_dict.get('unit', '')}\n")
                     zf.writestr('metrics.csv', csv_output.getvalue())
 
-                ui.download.bytes(zip_buffer.getvalue(), f"session_{session.get('session_id', 'unknown')[:8]}.uartscope")
+                ui.download.bytes(zip_buffer.getvalue(), f"session_{session.get('id', 'unknown')[:8]}.uartscope")
                 ui.notify('Bundle exported!', type='positive')
 
             with ui.tab_panel(t4):
@@ -1916,9 +1916,17 @@ def session_detail_page():
         golden_data = {'packet_count': 0, 'metrics': {}, 'error_count': 0, 'metric_samples': {}}
 
         def mark_as_golden():
+            # Read the metrics from the engine, keyed by the session's device.
+            # v1 read session['metrics_latest'], a key no part of the product
+            # ever writes, so the golden set was always empty.
             golden_data['packet_count'] = session.get('packet_count', 0)
             golden_data['name'] = session.get('name', '')
-            golden_data['metrics'] = session.get('metrics_latest', {})
+            golden_data['metrics'] = {
+                name: hist[-1].value
+                for name, hist in (
+                    telemetry_engine.get_all_metrics(
+                        session.get('device_id', '')) or {}).items()
+                if hist}
             golden_data['error_count'] = session.get('error_count', 0)
             golden_data['metric_samples'] = {}
             golden_status.text = f"⭐ Golden: {golden_data['name']} ({golden_data['packet_count']} pkts)"
@@ -1947,8 +1955,25 @@ def session_detail_page():
 
             # Compare metrics (latest values)
             if check_metrics.value:
-                current_metrics = session.get('metrics_latest', {})
+                # Same source as the golden snapshot above, so both sides of the
+                # comparison come from the engine rather than a field that does
+                # not exist.
+                current_metrics = {
+                    name: hist[-1].value
+                    for name, hist in (
+                        telemetry_engine.get_all_metrics(
+                            session.get('device_id', '')) or {}).items()
+                    if hist}
                 golden_metrics = golden_data.get('metrics', {})
+                if not golden_metrics:
+                    results.append({
+                        'name': 'Metric comparison',
+                        'expected': 'a golden session',
+                        'actual': 'none marked',
+                        'diff': '--',
+                        'pass': False,
+                    })
+                    passed = False
                 for metric_name, golden_val in golden_metrics.items():
                     if isinstance(golden_val, (int, float)):
                         current_val = current_metrics.get(metric_name, 0)
