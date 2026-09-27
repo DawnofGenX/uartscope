@@ -27,6 +27,7 @@ from app.core.websocket_hub import ws_manager
 from app.core.protocol_decoder import protocol_manager
 from app.core.performance_tracker import performance_tracker
 from app.core.mqtt_client import mqtt_manager
+from app.models import DeviceCreate
 
 logger = logging.getLogger(__name__)
 
@@ -163,70 +164,138 @@ def build_sidebar():
             _build_rail_footer()
 
 
+# One observable dict drives every piece of live status text in the shell, so
+# the header and the rail can never disagree with each other or with the page
+# body. NiceGUI's bind_text_from polls it, so any state change only has to
+# write here -- no shell rebuild required.
+_STATUS_SRC: dict[str, str] = {
+    'device_ratio': '0/0',
+    'received': '0 B',
+    'headline': 'No devices',
+}
+
+# Live dot elements, so _refresh_status() can restyle them without a rebuild.
+_STATUS_DOTS: list = []
+
+
+def _set_dot(el, state):
+    """Apply the dot colour for a status state. Colour is always accompanied by
+    the headline text, so it is never the only signal."""
+    el.style(f'color: {STATUS[state]}')
+
+
+def _refresh_status():
+    """Recompute global status text and push it to every live label."""
+    stats = get_stats()
+    total = stats.get('total', 0)
+    connected = stats.get('connected', 0)
+    streaming = stats.get('streaming', 0)
+
+    if streaming:
+        headline = f"Streaming {streaming}"
+    elif connected:
+        headline = f"{connected} of {total} connected"
+    elif total:
+        headline = f"{total} registered, none started"
+    else:
+        headline = "No devices"
+
+    _STATUS_SRC['device_ratio'] = f"{connected}/{total}"
+    _STATUS_SRC['received'] = format_bytes(stats['total_bytes_received'])
+    _STATUS_SRC['headline'] = headline
+
+    state = 'live' if streaming else ('info' if connected else 'idle')
+    for dot in _STATUS_DOTS:
+        try:
+            _set_dot(dot, state)
+        except Exception:
+            # A dot from a previous page build can be detached by now; that is
+            # not worth failing a status refresh over.
+            pass
+
+
 def _build_rail_footer():
-    """Global counters, pinned to the bottom of the rail."""
+    """Global counters, pinned to the bottom of the rail.
+
+    The labels are registered as live status text so _refresh_status() can
+    update them in place. v1 rebuilt the shell only on page navigation, which
+    left the rail reading 0/0 while the device list below it showed a device --
+    the header and the content disagreeing is worse than either being stale.
+    """
     stats = get_stats()
     with ui.column().classes(
             'w-full px-4 py-4 gap-2 border-t border-[rgba(176,174,165,0.16)]'):
         with ui.row().classes('items-baseline justify-between w-full'):
-            ui.label(f"{stats['connected']}/{stats['total']}").classes('us-mono')
+            ui.label(f"{stats['connected']}/{stats['total']}").classes(
+                'us-mono').bind_text_from(_STATUS_SRC, 'device_ratio')
             ui.label('Devices').classes('us-micro')
         with ui.row().classes('items-baseline justify-between w-full'):
-            ui.label(format_bytes(stats['total_bytes_received'])).classes('us-mono')
+            ui.label().classes('us-mono').bind_text_from(
+                _STATUS_SRC, 'received')
             ui.label('Received').classes('us-micro')
 
 
 # ─── Pages ───────────────────────────────────────────────────────────────────
 
+# Baud rates offered in the add-device form. Ordered by how often embedded devs
+# actually use them, so the common case needs no scrolling.
+COMMON_BAUDRATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
+
+# Connection states -> status token. A single accent colour cannot carry four
+# distinct states, and v1 gave every state the same blue.
+DEVICE_STATE_COLOR = {
+    'streaming': 'live',
+    'connected': 'info',
+    'registered': 'idle',
+    'error': 'error',
+    'disconnected': 'idle',
+}
+
+
+def _device_state(dev):
+    """Return (token_key, human label) for a device's connection state."""
+    status = (getattr(dev, 'status', None) or 'registered').lower()
+    if status == 'streaming':
+        return 'live', 'Streaming'
+    if status == 'connected':
+        return 'info', 'Connected'
+    if status in ('error', 'failed'):
+        return 'error', 'Error'
+    return 'idle', 'Ready'
+
+
 def devices_page():
-    """Devices panel - register, start/stop, auto-reconnect."""
-    container = ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto')
+    """Devices: an Operate surface.
+
+    The correct archetype here is Operate -- the user is acting on a fleet of
+    ports. v1 rendered this landing screen as a stack of decorative cards with a
+    dead-end empty state ("Connect a serial device" with no way to do it) and
+    reported no live rate, even though the backend tracks bytes and packets.
+
+    v2 makes the empty state actionable -- it can actually scan for ports,
+    because device_manager.detect_ports() already existed and was never called
+    from the UI -- and switches connected devices to dense rows.
+    """
+    container = ui.column().classes('w-full gap-5')
+    scan_state = {'running': False, 'ports': [], 'error': None, 'scanned': False}
 
     def refresh_devices():
         stats = get_stats()
         devices = get_devices()
         container.clear()
-
-        # Stats bar
-        with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val in [
-                ('Devices', f"{stats['connected']}/{stats['total']}"),
-                ('Data', format_bytes(stats['total_bytes_received'])),
-                ('Streaming', str(stats['streaming'])),
-                ('WS Clients', str(stats.get('websocket_clients', 0))),
-            ]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(val).classes('text-2xl font-semibold text-white')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
-
-        if not devices:
-            with container:
-                with ui.card().classes('w-full p-12 text-center') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label('◈').classes('text-4xl text-[#5c8af0] mb-2')
-                    ui.label('No devices connected').classes('text-[#e4e4e7] font-semibold text-lg')
-                    ui.label('Connect a serial device to start monitoring').classes('text-[#52525b] text-sm mt-1')
-        else:
-            for device in devices:
-                with container:
-                    with ui.card().classes('w-full p-4') \
-                        .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                        with ui.row().classes('w-full items-center justify-between mb-3'):
-                            with ui.column().classes('gap-0.5'):
-                                with ui.row().classes('items-center gap-2'):
-                                    sc = '#22c55e' if device.status == 'streaming' else ('#3b82f6' if device.status == 'connected' else '#52525b')
-                                    ui.label(' ').classes('inline-block w-2 h-2 rounded-full').style(f'background: {sc}')
-                                    ui.label(device.name or 'Unnamed').classes('text-white font-semibold')
-                                ui.label(f"{device.port} · {device.baudrate} baud").classes('text-[#52525b] text-xs font-mono')
-                            with ui.row().classes('gap-2 mt-1'):
-                                if device.status == 'streaming':
-                                    ui.button('Stop', on_click=lambda d=device: stop_device(d)).classes('bg-[#ef4444] text-white px-4 py-1.5 text-sm rounded-lg font-medium')
-                                    ui.button('Terminal', on_click=lambda d=device: open_terminal(d)).classes('bg-[#5c6fd0] text-white px-4 py-1.5 text-sm rounded-lg font-medium')
-                                else:
-                                    ui.button(f"{'⟳ Auto' if device.auto_reconnect else '⟳ Manual'}",
-                                              on_click=lambda d=device: toggle_reconnect(d)).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
-                                    ui.button('Start', on_click=lambda d=device: start_device(d)).classes('bg-[#5c6fd0] text-white px-4 py-1.5 text-sm rounded-lg font-medium')
+        _refresh_status()
+        # MUST re-enter the container. After clear(), NiceGUI's ambient context
+        # still points at the now-deleted slot, so building without this raises
+        # "The parent element this slot belongs to has been deleted" -- which
+        # silently blanked the page on the first scan click.
+        with container:
+            _devices_body(stats, devices, scan_state, refresh_devices, {
+                'start': start_device,
+                'stop': stop_device,
+                'reconnect': toggle_reconnect,
+                'terminal': open_terminal,
+                'charts': open_charts,
+            })
 
     async def start_device(device):
         try:
@@ -242,13 +311,14 @@ def devices_page():
                 latest = telemetry_engine.get_latest_values(dev_id)
                 for mn, val in latest.items():
                     from app.core.telemetry_engine import Metric
-                    await alert_engine.evaluate(dev_id, session_id, Metric(name=mn, value=val, unit=None, message_type="metric"))
+                    await alert_engine.evaluate(dev_id, sess_id, Metric(name=mn, value=val, unit=None, message_type="metric"))
 
             await serial_reader.start_device(device_manager._devices[device.id], session_id, on_data)
             ui.notify(f"Started streaming from {device.name}", type='positive')
             refresh_devices()
         except Exception as e:
-            ui.notify(f"Failed: {e}", type='negative')
+            ui.notify(f"Could not start {device.name}: {e}", type='negative')
+            refresh_devices()
 
     async def stop_device(device):
         try:
@@ -261,10 +331,14 @@ def devices_page():
             ui.notify(f"Stopped {device.name}", type='info')
             refresh_devices()
         except Exception as e:
-            ui.notify(f"Failed: {e}", type='negative')
+            ui.notify(f"Could not stop {device.name}: {e}", type='negative')
+            refresh_devices()
 
     async def toggle_reconnect(device):
         device.auto_reconnect = not device.auto_reconnect
+        ui.notify(
+            f"{device.name}: {'auto' if device.auto_reconnect else 'manual'} reconnect",
+            type='info')
         refresh_devices()
 
     def open_terminal(device):
@@ -273,7 +347,235 @@ def devices_page():
         current_tab = 'terminal'
         rebuild()
 
+    def open_charts(device):
+        global selected_device, current_tab
+        selected_device = device
+        current_tab = 'charts'
+        rebuild()
+
     refresh_devices()
+
+
+def _devices_body(stats, devices, scan_state, refresh, actions):
+    """Summary strip plus either the device rows or the empty state.
+
+    Split out of refresh_devices() so the whole body rebuilds inside one
+    `with container:` block -- see the comment there about the deleted-slot
+    RuntimeError.
+    """
+    # ── Summary strip ────────────────────────────────────────────────────
+    # Real numbers the user acts on, not vanity metrics.
+    with ui.row().classes('w-full gap-3'):
+        for label, val, token in [
+            ('Devices', f"{stats['connected']}/{stats['total']}", None),
+            ('Received', format_bytes(stats['total_bytes_received']), None),
+            ('Streaming', str(stats['streaming']),
+             'live' if stats['streaming'] else 'idle'),
+        ]:
+            with ui.column().classes('us-card flex-1 gap-1 !p-4'):
+                ui.label(label).classes('us-label us-muted')
+                # Colour the value only when it carries state; a count of
+                # zero is not an alarm.
+                ui.label(val).classes('us-metric').style(
+                    f'color: {STATUS[token]}' if token else '')
+
+    if not devices:
+        _devices_empty_state(scan_state, refresh)
+    else:
+        _device_rows(devices, refresh, actions)
+
+
+def _device_rows(devices, refresh, actions):
+    """Connected devices as dense rows, not cards.
+
+    An Operate surface is scanned, not admired: one line per device, state
+    legible at a glance, actions at the row's trailing edge. Callbacks arrive as
+    an explicit `actions` map rather than as closures, so this stays a plain
+    module-level function.
+
+    The caller must already be inside the target container -- NiceGUI binds ui.*
+    to the ambient context, not to a container passed in as an argument.
+    """
+    ui.label('CONNECTED').classes('us-label us-muted')
+    with ui.column().classes('w-full gap-2'):
+        for device in devices:
+            token, state_label = _device_state(device)
+            with ui.row().classes('us-row w-full items-center gap-4'):
+                ui.html(f'<span class="us-dot us-dot-{token}">')
+                with ui.column().classes('gap-0.5 flex-1 min-w-0'):
+                    with ui.row().classes('items-center gap-2'):
+                        ui.label(device.name or 'Unnamed').classes(
+                            'us-subhead truncate')
+                        ui.label(state_label).classes('us-micro').style(
+                            f'color: {STATUS[token]}')
+                    with ui.row().classes('items-baseline gap-3'):
+                        ui.label(device.port).classes('us-mono us-muted')
+                        ui.label(f'{device.baudrate:,} baud').classes(
+                            'us-micro us-muted')
+                        if getattr(device, 'board_type', None):
+                            ui.label(device.board_type).classes(
+                                'us-micro us-muted')
+                with ui.row().classes('items-center gap-2'):
+                    if device.status == 'streaming':
+                        _btn('Stop', 'us-btn-danger',
+                             lambda d=device: actions['stop'](d))
+                        _btn('Charts', 'us-btn-secondary',
+                             lambda d=device: actions['charts'](d))
+                        _btn('Terminal', 'us-btn-primary',
+                             lambda d=device: actions['terminal'](d))
+                    else:
+                        _btn('Auto' if device.auto_reconnect else 'Manual',
+                             'us-btn-ghost',
+                             lambda d=device: actions['reconnect'](d))
+                        _btn('Start', 'us-btn-primary',
+                             lambda d=device: actions['start'](d))
+
+
+def _btn(text, cls, handler):
+    """A themed button. NiceGUI stamps Quasar's text-primary on every
+    ui.button(); the us-btn-* classes are what actually carry the palette."""
+    b = ui.button(text, on_click=handler)
+    b.props('flat no-caps')
+    b.classes(f'us-btn {cls}')
+    return b
+
+
+def _devices_empty_state(scan_state, refresh):
+    """Actionable empty state: scan, list what's there, or learn how.
+
+    v1's version said "Connect a serial device to start monitoring" and offered
+    nothing -- a dead end, and the documented first-run failure mode for this
+    class of tool. The three distinct outcomes here mirror the real ones:
+    no ports, ports found, or scan failed.
+    """
+    with ui.column().classes('us-empty w-full'):
+        with ui.column().classes('gap-2'):
+            ui.label('No devices connected').classes('us-display')
+            ui.label(
+                'Scan for serial ports, or add one manually if your board is '
+                'already open in another program.').classes('us-body')
+
+        # Primary action. Disabled while scanning, with the state shown.
+        scanning = scan_state['running']
+        scan_btn = ui.button(
+            'Scanning…' if scanning else 'Scan for devices',
+            on_click=lambda: _run_scan(scan_state, refresh),
+        ).props('flat no-caps')
+        scan_btn.classes('us-btn us-btn-primary')
+        if scanning:
+            scan_btn.disable()
+
+        # Scan result
+        if scan_state['error']:
+            with ui.row().classes('items-start gap-2 us-body').style(
+                    f'color: {STATUS["error"]}'):
+                ui.html(f'<span class="us-dot" style="background:{STATUS["error"]}">')
+                ui.label(scan_state['error'])
+
+        ports = scan_state['ports']
+        if ports:
+            ui.label(f'{len(ports)} port{"" if len(ports) == 1 else "s"} found'
+                     ).classes('us-label us-muted mt-2')
+            with ui.column().classes('w-full gap-2'):
+                for p in ports:
+                    _detected_port_row(p, refresh)
+        elif scan_state['error'] is None and scan_state['scanned']:
+            # Scan ran and genuinely found nothing -- say so plainly, and point
+            # at the most common cause rather than leaving a blank region.
+            ui.label('No serial ports found').classes('us-subhead')
+            ui.label(
+                'Check the cable and that the board has power. If another '
+                'program has the port open, close it and scan again.'
+            ).classes('us-body us-muted')
+
+        # Guidance: a short 3-step path, not a paragraph.
+        ui.label('CONNECTING A BOARD').classes('us-label us-muted mt-2')
+        with ui.column().classes('us-empty-steps w-full'):
+            for i, step in enumerate([
+                'Plug the board in over USB. Most ESP32 and Arduino boards '
+                'enumerate as a serial port automatically.',
+                'Close any other program holding the port — the Arduino IDE '
+                'Serial Monitor, PlatformIO monitor, or a previous UARTScope '
+                'window all block it.',
+                'Scan above, then press Start on the port you want.',
+            ], start=1):
+                with ui.row().classes('us-empty-step'):
+                    ui.label(str(i)).classes('us-step-num')
+                    ui.label(step).classes('flex-1')
+
+
+def _is_real(value):
+    """True when a backend-detected string is actual information.
+
+    detect_ports() returns the literal "n/a" (description) and "Unknown"
+    (board_type) for anything it cannot fingerprint, and WSL reports every
+    ttyS* that way. Rendering those verbatim puts "n/a" in the UI as though it
+    were a device description, so they are treated as missing everywhere.
+    """
+    return bool(value) and value.strip().lower() not in (
+        'n/a', 'na', 'unknown', 'none', '-', 'null')
+
+
+def _detected_port_row(port, refresh):
+    """One detected port, with a friendly name and a one-click add.
+
+    This is the payoff of the actionable empty state: the user can go from
+    nothing registered to a device that is ready to Start, in two clicks.
+    """
+    board = port.get('board_type') if _is_real(port.get('board_type')) \
+        else 'Serial port'
+    description = port.get('description') if _is_real(port.get('description')) \
+        else ''
+    with ui.row().classes('us-row w-full items-center gap-3'):
+        ui.html(icon('devices', 18))
+        with ui.column().classes('gap-0.5 flex-1 min-w-0'):
+            with ui.row().classes('items-baseline gap-2'):
+                ui.label(port['port']).classes('us-mono')
+                ui.label(board).classes('us-micro us-muted')
+            if description:
+                ui.label(description).classes('us-micro us-muted truncate')
+        _btn('Add', 'us-btn-secondary', lambda p=port: _add_detected(p, refresh))
+
+
+async def _run_scan(scan_state, refresh):
+    """Enumerate serial ports via the backend's existing detect_ports().
+
+    detect_ports() has existed in the backend all along; v1's UI simply never
+    called it, which is why the empty state could not act on its own advice.
+    """
+    scan_state['running'] = True
+    scan_state['error'] = None
+    scan_state['ports'] = []
+    try:
+        scan_state['ports'] = await device_manager.detect_ports()
+    except Exception as e:
+        scan_state['error'] = f"Port scan failed: {e}"
+    finally:
+        scan_state['running'] = False
+        scan_state['scanned'] = True
+    refresh()
+
+
+async def _add_detected(port, refresh):
+    """Register a detected port as a device, defaulting to 115200."""
+    try:
+        # Name it after the port, not the board guess. The backend reports
+        # board_type="Unknown" for anything it cannot fingerprint, and "Unknown"
+        # as a device name tells the user nothing they can act on.
+        dev = await device_manager.add_device(DeviceCreate(
+            name=port['port'],
+            port=port['port'],
+            baudrate=115200,
+            board_type=port.get('board_type') if _is_real(
+                port.get('board_type')) else None,
+            metadata={'description': port.get('description'),
+                      'manufacturer': port.get('manufacturer')},
+        ))
+        ui.notify(
+            f"Added {port['port']} — press Start to connect it", type='positive')
+        refresh()
+    except Exception as e:
+        ui.notify(f"Could not add {port['port']}: {e}", type='negative')
 
 
 def terminal_page():
@@ -1706,6 +2008,7 @@ content_container = None
 def rebuild():
     """Rebuild the entire UI."""
     global content_container
+    _refresh_status()
     if content_container:
         content_container.clear()
         with content_container:
@@ -1759,16 +2062,23 @@ def build_header():
                     'background:rgba(176,174,165,0.10)')
 
 def _header_status():
-    """Live connection state. Colour is backed by a text label, never alone."""
-    stats = get_stats()
-    live = stats.get('connected', 0) > 0
-    with ui.row().classes('us-status items-center gap-2'):
-        ui.html(f'<span class="us-dot {"us-dot-live" if live else "us-dot-idle"}">')
-        ui.label(
-            f"{stats.get('connected', 0)} of {stats.get('total', 0)} devices"
-            if live else "No devices"
-        ).classes('us-caption')
+    """Live connection state, bound to the shared status source.
 
+    v2 distinguishes three states, not two: registered-but-not-started devices
+    are a real and common state, and collapsing them into "No devices" left the
+    header contradicting the device list directly below it.
+
+    NiceGUI has no class binding and .style() takes a plain string, not a
+    callable, so the dot is a real label whose colour _refresh_status() writes
+    directly. The registry is reset on every build so a page navigation cannot
+    leave detached elements behind in it.
+    """
+    _STATUS_DOTS.clear()
+    with ui.row().classes('us-status items-center gap-2'):
+        dot = ui.label('●').classes('us-dot-label')
+        _STATUS_DOTS.append(dot)
+        ui.label().classes('us-caption').bind_text_from(
+            _STATUS_SRC, 'headline')
 
 # One line of orientation per screen. Monitor surfaces, not marketing copy.
 _TAB_SUBTITLES = {
@@ -1822,6 +2132,11 @@ def main_page():
     with content_container:
         build_header()
         render_content()
+
+    # Keep the header and rail honest without a full rebuild. 2s is fast enough
+    # to feel live and cheap enough to ignore; the labels it drives are all
+    # small text nodes, so this is not a repaint of the page.
+    ui.timer(2.0, _refresh_status)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

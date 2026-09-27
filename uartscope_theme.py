@@ -342,6 +342,21 @@ body, .q-body {{
 }}
 .us-dot-live {{ background:{st['live']}; }}
 .us-dot-idle {{ background:{st['idle']}; }}
+.us-dot-info {{ background:{st['info']}; }}
+.us-dot-error {{ background:{st['error']}; }}
+/* The header dot is a real element (NiceGUI has no class binding), so its
+   colour is written inline by _set_dot(). Size and baseline live here. */
+.us-dot-label {{
+  font-size:9px; line-height:1; color:{st['idle']};
+  flex:0 0 auto; display:inline-block;
+}}
+/* A pulsing halo marks the one state that is live right now. Colour alone is
+   never the only signal -- every dot is accompanied by its state word. */
+.us-dot-live {{ animation:us-pulse 2.4s ease-in-out infinite; }}
+@keyframes us-pulse {{
+  0%, 100% {{ box-shadow:0 0 0 0 {st['live']}33; }}
+  50%      {{ box-shadow:0 0 0 4px transparent; }}
+}}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .us-btn {{
