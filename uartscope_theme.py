@@ -79,6 +79,19 @@ STATUS: dict[str, str] = {
     "info": "#7ba0c8",      # the one cool value; a non-brand semantic
 }
 
+# Low-alpha washes of the status colours, for hover and selected fills. Kept
+# here rather than written inline at each call site so the palette stays in one
+# place and the tint ratio is a decision, not a typo repeated. Folded into
+# STATUS below as <key>_tint so there is exactly one palette to look at.
+_STATUS_TINT: dict[str, str] = {
+    "error": "rgba(226,104,92,0.12)",
+    "warn": "rgba(233,180,76,0.12)",
+    "info": "rgba(123,160,200,0.12)",
+    "live": "rgba(42,157,143,0.12)",
+    "idle": "rgba(135,134,127,0.12)",
+}
+STATUS.update({f"{k}_tint": v for k, v in _STATUS_TINT.items()})
+
 TYPE: dict[str, object] = {
     "sans": "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
     "mono": "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -167,6 +180,9 @@ CONTRAST_AUDIT: list[tuple[str, str, str, float, str]] = [
 # Chosen for even optical weight at 20px; all share the same 24-unit grid.
 
 ICONS: dict[str, str] = {
+    # The brand mark. A waveform, because the product reads a signal -- not a
+    # horse, which is what v1 shipped.
+    "brand": '<path d="M2.5 12h3l2-6 3 12 2.5-8 1.5 4h7"/>',
     "devices": (
         '<rect x="2.5" y="4.5" width="19" height="13" rx="2"/>'
         '<path d="M8 20.5h8M12 17.5v3"/>'
@@ -430,6 +446,26 @@ body, .q-body {{
 .us-unit {{ color:{TEXT['muted']}; font-size:{TYPE['scale']['micro']}px;
   letter-spacing:0.04em; text-transform:none; font-weight:{weight['medium']}; }}
 
+/* Brand mark. currentColor means the SVG itself never carries a colour. */
+.us-brand-mark {{ color:{ACCENT['text']}; }}
+
+/* ── Alerts / rules ─────────────────────────────────────────────────────── */
+/* A silenced rule and an acknowledged alert both stay in the list -- deleting
+   them would hide the fact that they exist -- but they recede. The dimming is
+   deliberately mild: opacity 0.5 (v1) made the text fail contrast, so the
+   de-emphasis is carried by colour and a strike-through instead. */
+.us-row-dim {{ opacity:0.62; }}
+.us-row-dim .us-subhead {{ color:{TEXT['muted']}; }}
+.us-row-acked {{ background:transparent; }}
+.us-row-acked .us-body {{ color:{TEXT['muted']}; }}
+/* Alert message, the one column wide enough to need truncation. */
+.line-through {{ text-decoration:line-through; text-decoration-color:{TEXT['muted']}; }}
+
+.us-truncate {{
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  min-width:0;
+}}
+
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .us-btn {{
   display:inline-flex; align-items:center; gap:{sp['2']};
@@ -451,11 +487,17 @@ body, .q-body {{
 }}
 .us-btn-secondary:hover {{ background:{s['overlay']}; }}
 /* Ghost: text-only, for tertiary actions. */
-.us-btn-ghost {{ background:transparent; color:{x['secondary']}; }}
-.us-btn-ghost:hover {{ background:rgba(176,174,165,0.10); color:{x['primary']}; }}
+/* Ghost buttons still need to read as controls. Bare text (v1 and my first
+   pass) meant Silence looked like a label while Delete looked like a button,
+   so the destructive action appeared to be the primary one. */
+.us-btn-ghost {{
+  background:transparent; color:{x['secondary']};
+  border:1px solid {s['line']};
+}}
+.us-btn-ghost:hover {{ background:{s['line']}; color:{x['primary']}; }}
 .us-btn-danger {{ background:transparent; color:{st['error']};
                   box-shadow:{e['ring']}; }}
-.us-btn-danger:hover {{ background:rgba(226,104,92,0.14); }}
+.us-btn-danger:hover {{ background:{st['error_tint']}; }}
 .us-btn:disabled, .us-btn[aria-disabled="true"] {{
   opacity:0.45; cursor:not-allowed; pointer-events:none;
 }}

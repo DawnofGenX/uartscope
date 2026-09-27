@@ -23,7 +23,7 @@ from uartscope_theme import (
 )
 
 from app.core.device_manager import device_manager
-from app.core.telemetry_engine import telemetry_engine
+from app.core.telemetry_engine import telemetry_engine, Metric
 from app.core.session_recorder import session_recorder
 from app.core.alert_engine import alert_engine, AlertRule
 from app.core.serial_reader import serial_reader
@@ -60,13 +60,24 @@ def format_duration(started, ended=None, seconds=None):
     if d < 3600: return f"{d//60}m {d%60}s"
     return f"{d//3600}h {(d%3600)//60}m"
 
-def severity_color(sev):
-    """Map an alert severity to a v2 status token.
+# Alert severity -> status token KEY (not a colour). Callers resolve the key
+# through the theme, so a severity can never drift from the palette. v1 returned
+# raw hex here with no relationship to anything else in the UI.
+SEVERITY_TOKEN = {
+    'critical': 'error',
+    'warning': 'warn',
+    'info': 'info',
+}
 
-    v1 returned raw hex (#ef4444/#eab308/#3b82f6/#71717a) with no relationship to
-    the rest of the palette. The v2 values are computed for contrast on the dark
-    surfaces: error 5.59:1, warn 9.74:1, info 6.76:1, idle 5.04:1 on base.
-    """
+
+def severity_token(sev):
+    """Map an alert severity to a v2 status token key."""
+    return SEVERITY_TOKEN.get((sev or 'warning').lower(), 'warn')
+
+
+def severity_color(sev):
+    """Map an alert severity to its resolved colour. For inline styles only;
+    prefer a token class so the value stays in the theme."""
     return {
         'critical': STATUS['error'],
         'warning': STATUS['warn'],
@@ -136,14 +147,7 @@ def build_sidebar():
     with drawer:
         with ui.column().classes('w-full h-full'):
             with ui.row().classes('items-center gap-3 px-4 py-5'):
-                ui.html(
-                    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" '
-                    'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
-                    'stroke-linejoin="round" aria-hidden="true" '
-                    'style="color:#c96442">'
-                    '<path d="M2.5 12h3l2-6 3 12 2.5-8 1.5 4h7"/>'
-                    '</svg>'
-                )
+                ui.html(icon('brand', 22, 'us-brand-mark'))
                 ui.label('UARTScope').classes('us-subhead')
 
             ui.label('MONITOR').classes('us-label us-muted px-4 pb-2')
@@ -1415,144 +1419,329 @@ def charts_page():
     refresh_dashboard()
 
 def alerts_page():
+    """Alerts: configure and triage.
+
+    v1's structure was wrong in a way that made the screen unusable rather than
+    merely ugly:
+
+      * refresh_alerts() built its whole tree into the ambient context and never
+        cleared it. Every acknowledgement therefore appended a second copy of
+        the entire screen -- stats, rules and history -- below the first. Acking
+        three alerts gave you three screens.
+      * AlertRule has `enabled` and `trigger_count`, and v1 surfaced neither.
+        The single most common triage action, silencing a rule that is firing
+        constantly, had no control at all; the only verb offered was Delete,
+        which is destructive and irreversible.
+      * An unacknowledged alert and an acknowledged one looked almost the same
+        (opacity 50%), so the queue you are meant to work through had no
+        visible front edge.
+
+    v2 separates the two jobs: rules are configured on the left, the alert queue
+    is worked on the right, and the queue leads with what is unacknowledged.
+    """
+    global selected_device
 
     _bind_alerts_page, _late_alerts_page = _late_bindings()
-    """Alert management - rules, history, acknowledgment."""
+
+    # Filter state. Triage means narrowing; the queue has to be filterable or
+    # 200 acknowledged alerts bury the 2 that matter.
+    view = {'severity': 'all', 'show_acked': False}
+
+    def rules():
+        return get_alert_rules()
+
+    def events():
+        """Alert history, newest first, filtered for the current view."""
+        all_events = sorted(
+            get_alert_events(),
+            key=lambda a: a.get('timestamp', ''),
+            reverse=True)
+        out = []
+        for a in all_events:
+            if view['severity'] != 'all' and \
+                    a.get('severity') != view['severity']:
+                continue
+            if not view['show_acked'] and a.get('acknowledged'):
+                continue
+            out.append(a)
+        return out
+
+    # ── UI ───────────────────────────────────────────────────────────────
+    alerts_container = ui.column().classes('w-full gap-4')
+
     def refresh_alerts():
-        rules = get_alert_rules()
-        events = get_alert_events()
+        # MUST re-enter the container: after clear() the ambient context still
+        # points at the deleted slot.
+        alerts_container.clear()
+        with alerts_container:
+            _alerts_summary()
+            _alerts_rules()
+            _alerts_queue()
 
-        # Stats
-        unack = len([a for a in events if not a.get('acknowledged')])
+    def _alerts_summary():
+        all_events = get_alert_events()
+        unack = [a for a in all_events if not a.get('acknowledged')]
         by_sev = {}
-        for a in events:
-            s = a.get('severity', 'warning')
-            by_sev[s] = by_sev.get(s, 0) + 1
-        with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val, color in [
-                ('Unacknowledged', unack, '#ef4444'),
-                ('Total Alerts', len(events), '#f7f8f8'),
-                ('Critical', by_sev.get('critical', 0), '#ef4444'),
-                ('Warning', by_sev.get('warning', 0), '#eab308'),
-                ('Active Rules', len(rules), '#5c8af0'),
-            ]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(str(val)).classes('text-xl font-medium').style(f'color: {color}')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
+        for a in all_events:
+            by_sev[a.get('severity', 'warning')] = \
+                by_sev.get(a.get('severity', 'warning'), 0) + 1
+        active = [r for r in rules() if getattr(r, 'enabled', True)]
 
-        # Rules
-        with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            with ui.row().classes('w-full items-center justify-between mb-3'):
-                ui.label('Alert Rules').classes('text-white font-medium')
-                ui.button('+ New Rule', on_click=_late_alerts_page('show_add_rule_dialog')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+        with ui.row().classes('w-full gap-2 flex-wrap items-center'):
+            _stat('unacknowledged', str(len(unack)),
+                  'error' if unack else 'idle')
+            _stat('critical', str(by_sev.get('critical', 0)),
+                  'error' if by_sev.get('critical') else 'idle')
+            _stat('warning', str(by_sev.get('warning', 0)),
+                  'warn' if by_sev.get('warning') else 'idle')
+            _stat('rules active', f'{len(active)}/{len(rules())}', None)
+            _stat('total alerts', str(len(all_events)), None)
 
-            if not rules:
-                ui.label('No alert rules configured').classes('text-[#52525b] text-sm py-4')
-            else:
-                with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
-                    for rule in rules:
-                        with ui.row().classes('w-full items-center justify-between p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
-                            with ui.row().classes('items-center gap-3'):
-                                sev = severity_color(rule.severity or 'warning')
-                                ui.label('●').style(f'color: {sev}').classes('text-xs')
-                                with ui.column().classes('gap-0'):
-                                    ui.label(rule.name).classes('text-[#e4e4e7] text-sm font-medium')
-                                    ui.label(f"{rule.metric_name} {rule.condition} {rule.threshold}").classes('text-[#52525b] text-xs font-mono')
-                            with ui.row().classes('gap-2 mt-1'):
-                                ui.label(f"{rule.cooldown}s").classes('text-[#52525b] text-xs')
-                                ui.button('Delete', on_click=lambda r=rule: delete_rule(r)).classes('bg-[rgba(229,72,77,0.1)] text-[#ef4444] px-2 py-0.5 text-xs rounded')
+    def _stat(label, value, token):
+        with ui.column().classes('us-metric-pill !py-2'):
+            ui.label(label).classes('us-micro us-muted')
+            ui.label(value).classes('us-mono').style(
+                f'color: {STATUS[token]}' if token else '')
 
-        # Alert history
-        with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            with ui.row().classes('w-full items-center justify-between mb-3'):
-                ui.label('Recent Alerts').classes('text-white font-medium')
-                if events:
-                    ui.button('Ack All', on_click=_late_alerts_page('ack_all')).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
+    def _alerts_rules():
+        with ui.column().classes('w-full gap-2'):
+            with ui.row().classes('w-full items-center justify-between'):
+                ui.label('Rules').classes('us-label us-muted')
+                _btn('New rule', 'us-btn-primary',
+                     _late_alerts_page('show_add_rule_dialog'))
 
-            if not events:
-                ui.label('No alerts yet').classes('text-[#52525b] text-sm py-4')
-            else:
-                with ui.column().classes('w-full gap-1 max-h-72 overflow-y-auto'):
-                    for alert in reversed(events[-20:]):
-                        acked = alert.get('acknowledged', False)
-                        with ui.row().classes(f'w-full items-center gap-2 p-2 rounded-lg {"opacity-50" if acked else ""}').style('background: rgba(255,255,255,0.01)'):
-                            sev = severity_color(alert.get('severity', 'warning'))
-                            ui.label('●').style(f'color: {sev}').classes('text-xs')
-                            ui.label(alert.get('timestamp', '')[:19]).classes('text-[#52525b] text-xs font-mono')
-                            ui.label(alert.get('message', '')).classes(f'text-[#e4e4e7] text-sm flex-1 {"line-through" if acked else ""}')
-                            if not acked:
-                                ui.button('✓ Ack', on_click=lambda a=alert: ack_alert(a)).classes('bg-[rgba(113,112,255,0.1)] text-[#5c8af0] px-2 py-0.5 text-xs rounded font-medium')
-                            else:
-                                ui.label('✓ Acked').classes('text-[#22c55e] text-xs')
+            all_rules = rules()
+            if not all_rules:
+                with ui.column().classes('us-empty w-full'):
+                    with ui.column().classes('gap-2'):
+                        ui.label('No rules yet').classes('us-subhead')
+                        ui.label(
+                            'A rule watches one metric and raises an alert when '
+                            'it crosses a threshold. Without one, nothing is '
+                            'evaluated against the stream.'
+                        ).classes('us-body')
+                    _suggest_rules()
+                return
 
-    def _show_add_rule_dialog_impl():
-        dialog = ui.dialog()
-        with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
-            ui.label('New Alert Rule').classes('text-white font-medium mb-4 text-lg')
-            name = ui.input('Name', value='High Temperature').classes('mb-3 w-full').props('outlined').style('color: #e4e4e7')
-            metric = ui.input('Metric', value='TEMP').classes('mb-3 w-full').props('outlined').style('color: #e4e4e7')
-            condition = ui.select(['gt', 'lt', 'eq', 'range', 'change'], value='gt').classes('mb-1 w-full').props('outlined').style('color: #e4e4e7')
-            ui.label('gt=greater than, lt=less than, eq=equals, range=outside range, change=delta exceeds threshold').classes('text-[#52525b] text-[10px] mb-3 ml-1')
-            threshold_label = 'Min Δ (delta)' if condition.value == 'change' else 'Threshold'
-            threshold = ui.number(threshold_label, value=30).classes('mb-3 w-full').props('outlined').style('color: #e4e4e7')
-            cooldown = ui.number('Cooldown (s)', value=60).classes('mb-4 w-full').props('outlined').style('color: #e4e4e7')
-            with ui.row().classes('gap-2 justify-end w-full'):
-                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
-                ui.button('Create', on_click=lambda: create_rule(
-                    name.value, metric.value, condition.value, threshold.value, cooldown.value, dialog
-                )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+            with ui.column().classes('w-full gap-2'):
+                for rule in all_rules:
+                    _rule_row(rule)
 
-    _bind_alerts_page('show_add_rule_dialog', _show_add_rule_dialog_impl)
+    def _suggest_rules():
+        """Offer rules for metrics that actually exist, rather than an empty form.
 
-    async def create_rule(name, metric, condition, threshold, cooldown, dialog):
-        rule = AlertRule(
-            id=str(uuid.uuid4()),
-            name=name, metric_name=metric, condition=condition,
-            threshold=threshold, cooldown=cooldown
-        )
-        alert_engine.add_rule(rule)
-        dialog.close()
-        ui.notify(f"Rule '{name}' created", type='positive')
+        The form asks for a metric name by free text, so a typo creates a rule
+        that can never fire and the user has no way to tell.
+        """
+        names = []
+        if selected_device is not None:
+            try:
+                names = sorted(
+                    telemetry_engine.get_all_metrics(selected_device.id) or {})
+            except Exception:
+                names = []
+        if names:
+            ui.label(
+                f'Available on {selected_device.name or "this device"}: '
+                + ', '.join(names[:6])).classes('us-micro us-muted')
+
+    def _rule_row(rule):
+        token = severity_token(rule.severity)
+        enabled = getattr(rule, 'enabled', True)
+        with ui.column().classes(
+                f'us-row w-full items-center gap-4 '
+                f'{"us-row-dim" if not enabled else ""}'):
+            ui.html(f'<span class="us-dot us-dot-{token}">')
+            with ui.column().classes('gap-0.5 flex-1 min-w-0'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.label(rule.name).classes('us-subhead truncate')
+                    if not enabled:
+                        ui.label('silenced').classes('us-micro us-muted')
+                with ui.row().classes('items-baseline gap-2 flex-wrap'):
+                    ui.label(
+                        f"{rule.metric_name} {rule.condition} {rule.threshold}"
+                    ).classes('us-mono us-micro us-muted')
+                    ui.label(f'· {rule.severity}').classes('us-micro us-muted')
+                    # cooldown 0 means "no cooldown", not "every zero seconds";
+                    # printing it as-is was both wrong and confusing.
+                    if rule.cooldown:
+                        ui.label(f'· every {rule.cooldown}s').classes(
+                            'us-micro us-muted')
+                    else:
+                        ui.label('· no cooldown').classes('us-micro us-muted')
+                    triggered = getattr(rule, 'trigger_count', 0)
+                    if triggered:
+                        # A rule that has fired a lot is the one worth looking at.
+                        ui.label(f'· fired {triggered}×').classes(
+                            'us-micro').style(f'color: {STATUS[token]}')
+            with ui.row().classes('items-center gap-2'):
+                _btn('Silence' if enabled else 'Unsilence', 'us-btn-ghost',
+                     lambda r=rule, e=enabled: _toggle_rule(r, e))
+                _btn('Delete', 'us-btn-ghost us-btn-danger',
+                     lambda r=rule: _delete_rule(r))
+
+    def _toggle_rule(rule, enabled):
+        rule.enabled = not enabled
+        ui.notify(
+            f"{rule.name}: {'silenced' if not enabled else 'active'}",
+            type='info')
         refresh_alerts()
 
-    async def delete_rule(rule):
+    async def _delete_rule(rule):
         alert_engine.remove_rule(rule.id)
+        ui.notify(f"Deleted rule '{rule.name}'", type='info')
         refresh_alerts()
 
-    async def ack_alert(alert):
+    def _alerts_queue():
+        with ui.column().classes('w-full gap-2'):
+            with ui.row().classes('w-full items-center justify-between gap-3'):
+                ui.label('Queue').classes('us-label us-muted')
+                with ui.row().classes('items-center gap-2'):
+                    sev = ui.select(
+                        ['all', 'critical', 'warning', 'info'], value='all'
+                    ).classes('w-28 us-input').props('outlined dense')
+                    sev.bind_value(view, 'severity')
+                    sev.on_value_change(lambda: refresh_alerts())
+                    _btn('Show acked', 'us-btn-ghost', _toggle_acked)
+                    unacked = [a for a in get_alert_events()
+                               if not a.get('acknowledged')]
+                    if unacked:
+                        _btn('Ack all', 'us-btn-secondary',
+                             _late_alerts_page('ack_all'))
+
+            shown = events()
+            if not shown:
+                if view['show_acked']:
+                    ui.label('Nothing matches this filter.').classes(
+                        'us-body us-muted')
+                else:
+                    with ui.column().classes('us-empty w-full'):
+                        with ui.column().classes('gap-2'):
+                            ui.label('Queue is clear').classes('us-subhead')
+                            ui.label(
+                                'No unacknowledged alerts. New ones appear here '
+                                'as the stream crosses a rule threshold.'
+                            ).classes('us-body')
+                        _btn('Show acknowledged', 'us-btn-ghost', _toggle_acked)
+                return
+
+            with ui.column().classes('w-full gap-1'):
+                for a in shown[:100]:
+                    _alert_row(a)
+            if len(shown) > 100:
+                ui.label(
+                    f'{len(shown) - 100:,} older alerts not shown — narrow the '
+                    f'filter').classes('us-micro us-muted')
+
+    def _toggle_acked():
+        view['show_acked'] = not view['show_acked']
+        refresh_alerts()
+
+    def _alert_row(alert):
+        token = severity_token(alert.get('severity'))
+        acked = alert.get('acknowledged', False)
+        ts = (alert.get('timestamp') or '')[:19].replace('T', ' ')
+        with ui.row().classes(
+                f'us-row w-full items-center gap-3 '
+                f'{"us-row-acked" if acked else ""}'):
+            ui.html(f'<span class="us-dot us-dot-{token}">')
+            with ui.column().classes('gap-0.5 flex-1 min-w-0'):
+                with ui.row().classes('items-baseline gap-2 flex-wrap'):
+                    ui.label(alert.get('metric_name') or '—').classes(
+                        'us-mono us-micro us-muted')
+                    ui.label(ts).classes('us-mono us-micro us-muted')
+                ui.label(alert.get('message', '')).classes(
+                    f'us-body truncate {"line-through" if acked else ""}')
+            if acked:
+                ui.label('✓ acknowledged').classes('us-micro us-muted')
+            else:
+                _btn('Ack', 'us-btn-secondary',
+                     lambda a=alert: _ack_one(a))
+
+    async def _ack_one(alert):
         alert_engine.acknowledge_alert(alert.get('id', ''))
         refresh_alerts()
 
     async def _ack_all_impl():
-        for alert in get_alert_events():
+        # Acknowledge the same set the queue is showing, not the entire history:
+        # "Ack all" under an active filter must mean "all of these".
+        for alert in events():
             alert_engine.acknowledge_alert(alert.get('id', ''))
+        ui.notify('Acknowledged', type='info')
         refresh_alerts()
 
-    # Poll for new alerts every 2 seconds and show toast notifications
-    import asyncio
-    _last_alert_count = len(get_alert_events())
+    # ── New rule dialog ──────────────────────────────────────────────────
+    def _show_add_rule_dialog_impl():
+        dialog = ui.dialog()
+        with dialog, ui.column().classes('us-dialog w-[460px]'):
+            ui.label('New alert rule').classes('us-subhead')
+            name_input = ui.input('Name', value='').classes('w-full')
+            metric_input = ui.input('Metric', value='TEMP').classes('w-full')
+            condition = ui.select(['>', '<', '>=', '<=', '=='], value='>').classes(
+                'w-full')
+            threshold = ui.input('Threshold', value='80').classes('w-full')
+            severity = ui.select(
+                ['warning', 'critical', 'info'], value='warning').classes('w-full')
+            cooldown = ui.select(
+                {'10s': 10, '30s': 30, '60s': 60, '300s': 300, '900s': 900},
+                value=60, label='Cooldown').classes('w-full')
+            with ui.row().classes('w-full justify-end gap-2'):
+                _btn('Cancel', 'us-btn-ghost', dialog.close)
+                _btn('Create', 'us-btn-primary', lambda: _create_rule(
+                    name_input.value, metric_input.value, condition.value,
+                    threshold.value, severity.value, cooldown.value, dialog))
+        dialog.open()
 
-    _bind_alerts_page('ack_all', _ack_all_impl)
+    def _create_rule(name, metric, condition, threshold, severity, cooldown,
+                     dialog):
+        metric = (metric or '').strip().upper()
+        if not metric:
+            ui.notify('A rule needs a metric name', type='warning')
+            return
+        try:
+            value = float(threshold)
+        except (TypeError, ValueError):
+            ui.notify('Threshold must be a number', type='warning')
+            return
+        rule = AlertRule(
+            id=str(uuid.uuid4()),
+            name=(name or '').strip() or f'{metric} {condition} {value:g}',
+            metric_name=metric,
+            condition=condition,
+            threshold=value,
+            cooldown=int(cooldown or 60),
+            severity=severity,
+        )
+        alert_engine.add_rule(rule)
+        dialog.close()
+        ui.notify(f"Rule '{rule.name}' created", type='positive')
+        refresh_alerts()
 
+    # ── New-alert polling ────────────────────────────────────────────────
+    # Notify only. The queue itself re-renders on interaction; polling it every
+    # 2s would fight the user mid-acknowledgement and rebuild the page under
+    # their cursor.
     async def check_new_alerts():
-        nonlocal _last_alert_count
+        last = len(get_alert_events())
         while True:
             await asyncio.sleep(2)
-            current = get_alert_events()
-            if len(current) > _last_alert_count:
-                new = current[_last_alert_count:]
-                for a in new:
+            try:
+                current = get_alert_events()
+            except Exception:
+                logger.exception('alert poll failed')
+                continue
+            if len(current) > last:
+                for a in current[last:]:
                     if not a.get('acknowledged'):
-                        sev = a.get('severity', 'warning')
-                        color = {'critical': 'negative', 'warning': 'warning', 'info': 'info'}.get(sev, 'info')
-                        ui.notify(f"🚨 {a.get('message', '')}", type=color, timeout=6000)
-                _last_alert_count = len(current)
+                        token = severity_token(a.get('severity'))
+                        ui.notify(a.get('message') or 'Alert', type=(
+                            'negative' if token == 'error'
+                            else 'warning' if token == 'warn' else 'info'),
+                            timeout=6000)
+            last = len(current)
 
     asyncio.create_task(check_new_alerts())
-
     refresh_alerts()
-
 
 def sessions_page():
     """Session list view."""
@@ -2506,6 +2695,42 @@ def _seed_demo_telemetry():
     asyncio.create_task(feed())
 
 
+def _seed_demo_alerts():
+    """Seed rules and alert history for the preview, so the Alerts screen can be
+    reviewed with the states that matter: unacknowledged, acknowledged, and each
+    severity. Uses the same engine instance the page reads from, so this is real
+    data rather than a mock. Idempotent.
+    """
+    if alert_engine.get_all_rules():
+        return
+
+    for name, metric, cond, thr, sev in [
+        ('Over temperature', 'TEMP', '>', 30.0, 'critical'),
+        ('Signal degraded', 'RSSI', '<', -60.0, 'warning'),
+        ('Over voltage', 'VOLTAGE', '>', 3.30, 'info'),
+    ]:
+        alert_engine.add_rule(AlertRule(
+            id=name, name=name, metric_name=metric, condition=cond,
+            threshold=thr, cooldown=0, severity=sev))
+
+    async def feed():
+        for m in [Metric(name='TEMP', value=31.2),
+                  Metric(name='RSSI', value=-64.0),
+                  Metric(name='VOLTAGE', value=3.28),
+                  Metric(name='TEMP', value=32.4),
+                  Metric(name='RSSI', value=-71.0),
+                  Metric(name='TEMP', value=30.8),
+                  Metric(name='VOLTAGE', value=3.35),
+                  Metric(name='RSSI', value=-66.0),
+                  Metric(name='TEMP', value=33.1)]:
+            await alert_engine.evaluate('demo-device', 'demo-session', m)
+        # Acknowledge a couple so the queue renders both states.
+        for a in alert_engine.get_alert_history()[2:4]:
+            alert_engine.acknowledge_alert(a['id'])
+
+    asyncio.create_task(feed())
+
+
 @ui.page('/')
 @ui.page('/smoke/{tab}')
 def main_page(tab: str = 'devices', with_device: bool = False):
@@ -2529,6 +2754,8 @@ def main_page(tab: str = 'devices', with_device: bool = False):
     if with_device and selected_device is None:
         selected_device = _demo_device()
         _seed_demo_telemetry()
+    if with_device and tab == 'alerts':
+        _seed_demo_alerts()
 
     # v2 design system: tokens + Inter/JetBrains Mono. Must run before any
     # screen is built so the first paint is already themed.
