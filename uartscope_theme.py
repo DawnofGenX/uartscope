@@ -145,33 +145,61 @@ THEME: dict[str, object] = {
 
 # Measured WCAG 2.1 contrast for every text-bearing pair. Re-verify with
 # `python -m uartscope_theme --audit` if any value below changes.
-CONTRAST_AUDIT: list[tuple[str, str, str, float, str]] = [
-    # (label, foreground, background, ratio, verdict)
-    ("text-primary on base",      "#faf9f5", "#141413", 17.50, "AAA"),
-    ("text-primary on panel",     "#faf9f5", "#1e1e1c", 15.85, "AAA"),
-    ("text-primary on elevated",  "#faf9f5", "#30302e", 12.55, "AAA"),
-    ("text-secondary on base",    "#b0aea5", "#141413",  8.29, "AAA"),
-    ("text-secondary on panel",   "#b0aea5", "#1e1e1c",  7.51, "AAA"),
-    ("text-secondary on elevated","#b0aea5", "#30302e",  5.95, "AA"),
-    ("accent text on base",       "#e08e6d", "#141413",  7.25, "AAA"),
-    ("accent text on panel",      "#e08e6d", "#1e1e1c",  6.57, "AA"),
-    ("accent text on elevated",   "#e08e6d", "#30302e",  5.20, "AA"),
-    ("status live on base",       "#2a9d8f", "#141413",  5.55, "AA"),
-    ("status live on panel",      "#2a9d8f", "#1e1e1c",  5.02, "AA"),
-    ("status warn on base",       "#e9b44c", "#141413",  9.74, "AAA"),
-    ("status warn on panel",      "#e9b44c", "#1e1e1c",  8.82, "AAA"),
-    ("status error on base",      "#e2685c", "#141413",  5.59, "AA"),
-    ("status error on panel",     "#e2685c", "#1e1e1c",  5.06, "AA"),
-    ("status info on base",       "#7ba0c8", "#141413",  6.76, "AA"),
-    ("status info on panel",      "#7ba0c8", "#1e1e1c",  6.13, "AA"),
-    ("inverse text on accent",    "#141413", "#c96442",  4.73, "AA"),
-    ("text-primary on error",     "#faf9f5", "#e2685c",  3.13, "AA-large"),
+# (label, foreground group+key, background group+key, verdict)
+_AUDIT_SPEC: list[tuple[str, str, str, str, str]] = [
+    ("text-primary on base",      "TEXT", "primary", "SURFACE", "base", "AAA"),
+    ("text-primary on panel",     "TEXT", "primary", "SURFACE", "panel", "AAA"),
+    ("text-primary on elevated",  "TEXT", "primary", "SURFACE", "elevated", "AAA"),
+    ("text-secondary on base",    "TEXT", "secondary", "SURFACE", "base", "AAA"),
+    ("text-secondary on panel",   "TEXT", "secondary", "SURFACE", "panel", "AAA"),
+    ("text-secondary on elevated", "TEXT", "secondary", "SURFACE", "elevated", "AA"),
+    ("accent text on base",       "ACCENT", "text", "SURFACE", "base", "AAA"),
+    ("accent text on panel",      "ACCENT", "text", "SURFACE", "panel", "AA"),
+    ("accent text on elevated",   "ACCENT", "text", "SURFACE", "elevated", "AA"),
+    ("status live on base",       "STATUS", "live", "SURFACE", "base", "AA"),
+    ("status live on panel",      "STATUS", "live", "SURFACE", "panel", "AA"),
+    ("status warn on base",       "STATUS", "warn", "SURFACE", "base", "AAA"),
+    ("status warn on panel",      "STATUS", "warn", "SURFACE", "panel", "AAA"),
+    ("status error on base",      "STATUS", "error", "SURFACE", "base", "AA"),
+    ("status error on panel",     "STATUS", "error", "SURFACE", "panel", "AA"),
+    ("status info on base",       "STATUS", "info", "SURFACE", "base", "AA"),
+    ("status info on panel",      "STATUS", "info", "SURFACE", "panel", "AA"),
+    ("inverse text on accent",    "SURFACE", "base", "ACCENT", "base", "AA"),
+    ("text-primary on error",     "TEXT", "primary", "STATUS", "error", "AA-large"),
     # Error is a LIGHT fill, so it takes dark text, not ivory:
-    ("inverse text on error",     "#141413", "#e2685c",  5.59, "AA"),
+    ("inverse text on error",     "SURFACE", "base", "STATUS", "error", "AA"),
     # Decoration only — never body text:
-    ("muted on base (decor)",     "#87867f", "#141413",  5.04, "AA"),
-    ("muted on elevated (decor)", "#87867f", "#30302e",  3.62, "AA-large"),
+    ("muted on base (decor)",     "STATUS", "idle", "SURFACE", "base", "AA"),
+    ("muted on elevated (decor)", "STATUS", "idle", "SURFACE", "elevated", "AA-large"),
 ]
+
+_GROUPS = {
+    "TEXT": cast(dict, TEXT), "STATUS": cast(dict, STATUS),
+    "SURFACE": cast(dict, SURFACE), "ACCENT": cast(dict, ACCENT),
+}
+
+# (label, foreground, background, ratio, verdict) -- the ratio is computed at
+# audit time and compared against CONTRAST_EXPECTED, so drift is detectable.
+CONTRAST_AUDIT: list[tuple[str, str, str, float, str]] = [
+    (label, _GROUPS[fg_grp][fg_key], _GROUPS[bg_grp][bg_key], 0.0, verdict)
+    for label, fg_grp, fg_key, bg_grp, bg_key, verdict in _AUDIT_SPEC
+]
+
+# Ratios measured when the palette was chosen. Kept separate from the rows so
+# a token edit changes the computed ratio and leaves the expectation behind.
+CONTRAST_EXPECTED: dict[str, float] = {
+    "text-primary on base": 17.50, "text-primary on panel": 15.85,
+    "text-primary on elevated": 12.55, "text-secondary on base": 8.29,
+    "text-secondary on panel": 7.51, "text-secondary on elevated": 5.95,
+    "accent text on base": 7.25, "accent text on panel": 6.57,
+    "accent text on elevated": 5.20, "status live on base": 5.55,
+    "status live on panel": 5.02, "status warn on base": 9.74,
+    "status warn on panel": 8.82, "status error on base": 5.59,
+    "status error on panel": 5.06, "status info on base": 6.76,
+    "status info on panel": 6.13, "inverse text on accent": 4.73,
+    "text-primary on error": 3.13, "inverse text on error": 5.59,
+    "muted on base (decor)": 5.04, "muted on elevated (decor)": 3.62,
+}
 
 
 # ─── Icons ──────────────────────────────────────────────────────────────────
@@ -269,13 +297,19 @@ def contrast_ratio(fg: str, bg: str) -> float:
 
 
 def verify_contrast() -> list[str]:
-    """Return a list of contrast failures. Empty list means the palette holds."""
+    """Return a list of contrast failures. Empty list means the palette holds.
+
+    Compares the ratio computed from the LIVE tokens against the ratio recorded
+    when the palette was chosen, so editing a token is caught here rather than
+    silently shipping a colour nobody checked.
+    """
     failures = []
-    for label, fg, bg, recorded, _verdict in CONTRAST_AUDIT:
+    for label, fg, bg, _recorded, _verdict in CONTRAST_AUDIT:
         actual = contrast_ratio(fg, bg)
-        if abs(actual - recorded) > 0.02:
+        expected = CONTRAST_EXPECTED.get(label, actual)
+        if abs(actual - expected) > 0.02:
             failures.append(
-                f"{label}: recorded {recorded:.2f} but computes {actual:.2f}")
+                f"{label}: recorded {expected:.2f} but computes {actual:.2f}")
     return failures
 
 
@@ -749,12 +783,13 @@ if __name__ == "__main__":  # pragma: no cover
         print(f"{'pair':30s} {'ratio':>6s}  verdict")
         print("-" * 56)
         bad = []
-        for label, fg, bg, recorded, verdict in CONTRAST_AUDIT:
+        for label, fg, bg, _recorded, verdict in CONTRAST_AUDIT:
             actual = contrast_ratio(fg, bg)
-            mark = "ok" if abs(actual - recorded) <= 0.02 else "DRIFT"
+            expected = CONTRAST_EXPECTED.get(label, actual)
+            mark = "ok" if abs(actual - expected) <= 0.02 else "DRIFT"
             print(f"{label:30s} {actual:6.2f}  {verdict} ({mark})")
             if mark == "DRIFT":
-                bad.append(label)
+                bad.append(f'{label}: {actual:.2f} != recorded {expected:.2f}')
         print()
         if bad or verify_contrast():
             print("FAIL:", bad or verify_contrast())

@@ -9,15 +9,32 @@ Each tab is reached by driving the same selection path the UI uses -- the tabs
 that need a device are checked twice, once with none selected and once with a
 fake device bound, because the two paths build completely different trees.
 
-Run:  .venv-v2/bin/python smoke_pages.py [base_url]
+Two modes:
+
+    .venv-v2/bin/python smoke_pages.py              # probe a running app
+    .venv-v2/bin/python smoke_pages.py --boot       # start the app, probe, stop
+
+--boot is what CI uses. Without it the script only tests whatever happens to be
+listening, which in CI is nothing.
 """
+import argparse
+import os
+import subprocess
 import sys
-import types
+import time
 
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-BASE = (sys.argv[1] if len(sys.argv) > 1 else 'http://127.0.0.1:3000').rstrip('/')
+_P = argparse.ArgumentParser(add_help=True)
+_P.add_argument('base_url', nargs='?', default='http://127.0.0.1:3000')
+_P.add_argument('--boot', action='store_true',
+                help='start desktop_app.py, wait for it, then probe it')
+_P.add_argument('--wait', type=int, default=60,
+                help='seconds to wait for the app to come up (default 60)')
+_ARGS = _P.parse_args()
+
+BASE = _ARGS.base_url.rstrip('/')
 
 # Tabs reachable by query param, and the device state each needs exercised.
 TABS = [
@@ -54,8 +71,47 @@ def probe(path: str) -> tuple[int, str]:
 DEVICE_SCOPED = ['terminal', 'charts', 'sessions', 'session-detail']
 
 
+def wait_for_app(timeout: int) -> bool:
+    """Poll until the app answers, or give up. Returns False on timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        code, _ = probe('/')
+        if code == 200:
+            return True
+        time.sleep(1.0)
+    return False
+
+
 def main() -> int:
-    import desktop_app  # noqa: F401  - fail fast if the module cannot import
+    server = None
+    if _ARGS.boot:
+        server = subprocess.Popen(
+            [sys.executable, 'desktop_app.py'],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        print(f'starting desktop_app.py (pid {server.pid}), '
+              f'waiting up to {_ARGS.wait}s...')
+        if not wait_for_app(_ARGS.wait):
+            print('FAIL  the app never came up')
+            if server.poll() is None:
+                server.terminate()
+            output = server.stdout.read().decode('utf-8', 'replace') \
+                if server.stdout else ''
+            print(output[-2000:])
+            return 1
+        print('app is up\n')
+
+    try:
+        return _probe_all()
+    finally:
+        if server is not None and server.poll() is None:
+            server.terminate()
+            try:
+                server.wait(timeout=10)
+            except Exception:
+                server.kill()
+
+
+def _probe_all() -> int:
 
     failures = []
     checks = [(t, False) for t in TABS] + [(t, True) for t in DEVICE_SCOPED]

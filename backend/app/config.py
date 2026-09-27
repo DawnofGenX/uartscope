@@ -5,7 +5,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     app_name: str = "UARTScope Pro"
-    app_version: str = "0.1.0"
+    app_version: str = "2.0.0"
     debug: bool = False
 
     # Server

@@ -1,0 +1,118 @@
+{
+  "_comment": "Sample payloads for the Decoder and the Telemetry parser. Paste any of these into the Decoder's Hex field (as hex) or a device's serial line to see the product work without hardware. The `hex` field is the byte form; `line` is the ASCII form a serial device would send.",
+  "samples": [
+    {
+      "name": "Temperature and humidity telemetry",
+      "line": "TEMP:23.4",
+      "hex": "54454D503A32332E34",
+      "expects": {
+        "protocol": "uart_text",
+        "subtype": "key_value",
+        "metrics": {
+          "TEMP": {
+            "value": 23.4,
+            "unit": "\u00b0C"
+          }
+        }
+      }
+    },
+    {
+      "name": "Signal strength",
+      "line": "RSSI:-67",
+      "hex": "525353493A2D3637",
+      "expects": {
+        "protocol": "uart_text",
+        "metrics": {
+          "RSSI": {
+            "value": -67.0,
+            "unit": "dBm"
+          }
+        }
+      }
+    },
+    {
+      "name": "AT command",
+      "line": "AT+CSQ",
+      "hex": "41542B435351",
+      "expects": {
+        "protocol": "uart_text",
+        "subtype": "at_command",
+        "command": "AT+CSQ"
+      }
+    },
+    {
+      "name": "Modbus RTU read holding registers",
+      "hex": "010300000001840A",
+      "expects": {
+        "protocol": "modbus_rtu",
+        "device_addr": 1,
+        "function_code": 3,
+        "function_name": "Read Holding Registers",
+        "crc": "840A"
+      }
+    },
+    {
+      "name": "NMEA sentence",
+      "line": "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47",
+      "expects": {
+        "protocol": "uart_text",
+        "subtype": "nmea",
+        "sentence_type": "$GPGGA"
+      },
+      "hex": "2447504747412C3132333531392C343830372E3033382C4E2C30313133312E3030302C452C312C30382C302E392C3534352E342C4D2C34362E392C4D2C2C2A3437"
+    },
+    {
+      "name": "Key-value pairs, comma separated",
+      "line": "TEMP:23.4,HUMIDITY:44.1,VOLTAGE:3.31",
+      "hex": "54454D503A32332E342C48554D49444954593A34342E312C564F4C544147453A332E3331",
+      "expects": {
+        "protocol": "uart_text",
+        "subtype": "key_value",
+        "values": {
+          "TEMP": "23.4",
+          "HUMIDITY": "44.1",
+          "VOLTAGE": "3.31"
+        }
+      }
+    },
+    {
+      "name": "Plain text, no trailing newline",
+      "line": "READY",
+      "hex": "5245414459",
+      "expects": {
+        "protocol": "uart_text",
+        "_note": "This one used to decode as an I2C transaction. See CHANGELOG 2.0.0."
+      }
+    }
+  ],
+  "alert_rule_examples": [
+    {
+      "_note": "Rules as the UI creates them. Every condition here used to be a no-op -- the picker offered symbols and the engine compared names.",
+      "rule": {
+        "metric_name": "TEMP",
+        "condition": ">",
+        "threshold": 30.0,
+        "severity": "critical"
+      },
+      "fires_when": "TEMP exceeds 30 \u00b0C"
+    },
+    {
+      "rule": {
+        "metric_name": "RSSI",
+        "condition": "<",
+        "threshold": -60.0,
+        "severity": "warning"
+      },
+      "fires_when": "RSSI drops below -60 dBm"
+    },
+    {
+      "rule": {
+        "metric_name": "VOLTAGE",
+        "condition": ">=",
+        "threshold": 3.3,
+        "severity": "info"
+      },
+      "fires_when": "Voltage reaches 3.30 V or higher (inclusive)"
+    }
+  ]
+}

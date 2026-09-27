@@ -91,9 +91,32 @@ def main() -> int:
 
     # A retired key is only a failure if the UI actually reads it again. Reading
     # it from a comment or a test fixture is harmless, so check the source.
+    # Only real code counts. Comments and docstrings that *mention* a retired
+    # key to explain the bug are not reads of it -- and stripping them is what
+    # keeps this checker from flagging the very comments that document the fix.
+    import ast as _ast
     ui_src = (ROOT / 'desktop_app.py').read_text(encoding='utf-8')
-    code_only = '\n'.join(
-        l for l in ui_src.splitlines() if not l.strip().startswith('#'))
+    tree = _ast.parse(ui_src)
+    docstring_nodes = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.Module, _ast.FunctionDef,
+                             _ast.AsyncFunctionDef, _ast.ClassDef)):
+            body = getattr(node, 'body', None)
+            if (body and isinstance(body[0], _ast.Expr)
+                    and isinstance(body[0].value, _ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docstring_nodes.add(id(body[0].value))
+    live_lines = []
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstring_nodes:
+                continue
+        if hasattr(node, 'lineno'):
+            src_line = ui_src.splitlines()[node.lineno - 1]
+            if src_line.strip().startswith('#'):
+                continue
+            live_lines.append(src_line)
+    code_only = '\n'.join(live_lines)
 
     regressions = [
         k for k in sorted(RETIRED_KEYS)

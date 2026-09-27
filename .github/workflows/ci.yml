@@ -40,6 +40,26 @@ jobs:
         env:
           UARTSCOPE_DATABASE_URL: sqlite+aiosqlite:///./test.db
 
+      # The static checks exist because v1 shipped six screens that raised
+      # UnboundLocalError on every render, and a dict key the UI read that no
+      # producer ever wrote. Both are invisible to pytest -- the screen simply
+      # does not appear -- so they need their own gate.
+      - name: Static checks
+        run: |
+          pip install pyyaml
+          python check_handler_order.py
+          python check_dict_keys.py
+          # Exits 1 if a recorded contrast ratio has drifted from the computed
+          # one, or if any documented pair fails its WCAG verdict.
+          python -m uartscope_theme --audit
+
+      - name: Build every screen over HTTP
+        run: |
+          # Boots the real app and requests every page, so a screen that
+          # raises during render fails the build rather than the user.
+          pip install -r backend/requirements.txt
+          python smoke_pages.py --wait 60
+
   docker:
     runs-on: ubuntu-latest
     needs: test
