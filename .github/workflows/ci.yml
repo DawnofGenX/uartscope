@@ -61,7 +61,7 @@ jobs:
           # Boots the real app and requests every page, so a screen that
           # raises during render fails the build rather than the user.
           pip install -r backend/requirements.txt
-          python smoke_pages.py --wait 60
+          python smoke_pages.py --boot --wait 60
 
   docker:
     runs-on: ubuntu-latest

@@ -84,6 +84,16 @@ def wait_for_app(timeout: int) -> bool:
 
 def main() -> int:
     server = None
+    if not _ARGS.boot:
+        # Probing with nothing running produces 13 identical "http=0" failures
+        # that read like a product bug. CI hit exactly that: the workflow called
+        # this script with --wait but no --boot, so it tested an empty port.
+        # Say so up front instead of reporting a wall of connection errors.
+        code, body = probe('/')
+        if code == 0:
+            print('Nothing is listening at ' + BASE + '.')
+            print('Start the app first, or pass --boot to have this script start it.')
+            return 2
     if _ARGS.boot:
         server = subprocess.Popen(
             [sys.executable, 'desktop_app.py'],
