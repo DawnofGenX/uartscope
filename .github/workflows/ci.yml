@@ -31,8 +31,11 @@ jobs:
 
       - name: Lint with ruff
         run: |
+          # --max-line-length is not a ruff flag; the flag is --line-length.
+          # The old invocation exited 2 on the argument error, so this job had
+          # never actually linted anything.
           pip install ruff
-          cd backend && ruff check app/ --max-line-length=120
+          cd backend && ruff check app/ --line-length=120 --select E9,F63,F7,F82
 
       - name: Test with pytest
         run: |

@@ -1,6 +1,6 @@
 [project]
 name = "uartscope-pro"
-version = "0.1.0"
+version = "2.0.0"
 description = "Open-source embedded telemetry and debugging platform — the Wireshark of microcontrollers"
 readme = "README.md"
 license = {text = "MIT"}
@@ -10,7 +10,9 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",
-    "sqlalchemy>=2.0.0",
+    # [asyncio] pulls in greenlet, which the async engine needs at runtime.
+    # Plain sqlalchemy installs without it and the backend fails to import.
+    "sqlalchemy[asyncio]>=2.0.0",
     "aiosqlite>=0.20.0",
     "pyserial>=3.5",
     "websockets>=13.0",
