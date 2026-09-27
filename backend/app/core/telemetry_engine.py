@@ -82,6 +82,12 @@ class TelemetryEngine:
             except Exception as e:
                 logger.error(f"Callback error: {e}")
 
+        # Return the parse. process_line previously returned None, so every
+        # caller that wanted the metrics from the line it had just processed had
+        # to re-parse it or go through a callback. Returning it is what lets the
+        # session recorder and the alert engine consume the same single parse.
+        return msg
+
     def _parse(self, line: str) -> ParsedMessage:
         """Parse a line into structured data."""
         msg = ParsedMessage(raw=line, timestamp=datetime.utcnow(), message_type="log")

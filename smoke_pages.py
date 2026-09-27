@@ -48,7 +48,10 @@ def probe(path: str) -> tuple[int, str]:
 # are the ones that were broken in v1: Terminal and Decoder each raised
 # UnboundLocalError during construction, and the device-free path never touched
 # the code that raised.
-DEVICE_SCOPED = ['terminal', 'charts', 'sessions']
+# 'session-detail' is not a rail tab -- it is reached by choosing a session --
+# so it is listed here rather than derived from the nav items. It was the screen
+# with the most missing functionality, and the one hardest to reach in a test.
+DEVICE_SCOPED = ['terminal', 'charts', 'sessions', 'session-detail']
 
 
 def main() -> int:

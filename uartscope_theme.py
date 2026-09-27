@@ -183,6 +183,9 @@ ICONS: dict[str, str] = {
     # The brand mark. A waveform, because the product reads a signal -- not a
     # horse, which is what v1 shipped.
     "brand": '<path d="M2.5 12h3l2-6 3 12 2.5-8 1.5 4h7"/>',
+    # Affordance for "this row opens something". v1 made whole cards clickable
+    # with nothing to indicate it, so the sessions list looked read-only.
+    "chevron": '<path d="M9 5l7 7-7 7"/>',
     "devices": (
         '<rect x="2.5" y="4.5" width="19" height="13" rx="2"/>'
         '<path d="M8 20.5h8M12 17.5v3"/>'
@@ -448,6 +451,17 @@ body, .q-body {{
 
 /* Brand mark. currentColor means the SVG itself never carries a colour. */
 .us-brand-mark {{ color:{ACCENT['text']}; }}
+
+/* Clickable row. The hover must be a change of surface, not just a border, or
+   the affordance is invisible on the dark base. */
+.us-row-clickable {{ cursor:pointer; transition:background {MOTION['fast']}; }}
+.us-row-clickable:hover {{ background:{s['elevated']}; }}
+.us-row-clickable:active {{ background:{s['line']}; }}
+/* Keyboard focus on a clickable row. Same token as the global focus ring so
+   focus is one consistent visual language, not a per-component decision. */
+.us-row-clickable:focus-within {{
+  outline:2px solid {a['base']}; outline-offset:-2px; border-radius:{r['sm']};
+}}
 
 /* ── Alerts / rules ─────────────────────────────────────────────────────── */
 /* A silenced rule and an acknowledged alert both stay in the list -- deleting

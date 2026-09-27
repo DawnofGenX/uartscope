@@ -70,6 +70,10 @@ SEVERITY_TOKEN = {
 }
 
 
+_COOLDOWN_SECONDS = {'10s': 10, '30s': 30, '60s': 60, '300s': 300,
+                     '900s': 900}
+
+
 def severity_token(sev):
     """Map an alert severity to a v2 status token key."""
     return SEVERITY_TOKEN.get((sev or 'warning').lower(), 'warn')
@@ -321,12 +325,30 @@ def devices_page():
             device.status = 'streaming'
 
             async def on_data(dev_id=device.id, sess_id=session_id, line=""):
-                await telemetry_engine.process_line(dev_id, sess_id, line)
-                await session_recorder.record_packet(sess_id, {"device_id": dev_id, "raw": line})
-                latest = telemetry_engine.get_latest_values(dev_id)
-                for mn, val in latest.items():
-                    from app.core.telemetry_engine import Metric
-                    await alert_engine.evaluate(dev_id, sess_id, Metric(name=mn, value=val, unit=None, message_type="metric"))
+                parsed = await telemetry_engine.process_line(
+                    dev_id, sess_id, line)
+                await session_recorder.record_packet(
+                    sess_id, {"device_id": dev_id, "raw": line})
+
+                # Record the parsed metrics into the session. Nothing did this
+                # before, so every recorded session in the product had an empty
+                # metric list and the session Metrics tab had nothing to show.
+                for metric in getattr(parsed, 'metrics', None) or []:
+                    await session_recorder.record_metric(
+                        sess_id, {"name": metric.name, "value": metric.value,
+                                  "unit": metric.unit,
+                                  "timestamp": metric.timestamp.isoformat()})
+
+                # Evaluate alerts against the metrics this line actually
+                # produced, with their real units. v1 re-read get_latest_values
+                # -- every metric the device had ever sent -- and rebuilt each
+                # Metric with unit=None, discarding the unit inference and
+                # re-evaluating stale values on every single line.
+                for metric in getattr(parsed, 'metrics', None) or []:
+                    await alert_engine.evaluate(
+                        dev_id, sess_id,
+                        Metric(name=metric.name, value=metric.value,
+                               unit=metric.unit, message_type="metric"))
 
             await serial_reader.start_device(device_manager._devices[device.id], session_id, on_data)
             ui.notify(f"Started streaming from {device.name}", type='positive')
@@ -1682,9 +1704,11 @@ def alerts_page():
             threshold = ui.input('Threshold', value='80').classes('w-full')
             severity = ui.select(
                 ['warning', 'critical', 'info'], value='warning').classes('w-full')
+            # Key, not the mapped value: a dict-based select validates the
+            # option key. See the same correction on the replay speed picker.
             cooldown = ui.select(
                 {'10s': 10, '30s': 30, '60s': 60, '300s': 300, '900s': 900},
-                value=60, label='Cooldown').classes('w-full')
+                value='60s', label='Cooldown').classes('w-full')
             with ui.row().classes('w-full justify-end gap-2'):
                 _btn('Cancel', 'us-btn-ghost', dialog.close)
                 _btn('Create', 'us-btn-primary', lambda: _create_rule(
@@ -1709,7 +1733,9 @@ def alerts_page():
             metric_name=metric,
             condition=condition,
             threshold=value,
-            cooldown=int(cooldown or 60),
+            cooldown=(
+                _COOLDOWN_SECONDS.get(cooldown, 60)
+                if isinstance(cooldown, str) else int(cooldown or 60)),
             severity=severity,
         )
         alert_engine.add_rule(rule)
@@ -1744,41 +1770,21 @@ def alerts_page():
     refresh_alerts()
 
 def sessions_page():
-    """Session list view."""
-    def refresh_sessions():
-        sessions = get_sessions()
+    """Session list: what was captured, and where you can get to it.
 
-        with ui.row().classes('w-full gap-3 mb-4'):
-            recording = len([s for s in sessions if s.get('status') == 'recording'])
-            for label, val in [('Recording', recording), ('Total', len(sessions))]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(str(val)).classes('text-xl font-medium text-white')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
+    v1's list was three stacked cards that each re-declared the same inline
+    style, a bare '⟳' glyph for the empty state, and a row whose entire card
+    was clickable with no visible affordance. It also never showed the event
+    count or the device, so two captures from the same board minutes apart were
+    indistinguishable.
 
-        if not sessions:
-            with ui.card().classes('w-full p-12 text-center') \
-                .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                ui.label('⟳').classes('text-4xl text-[#5c8af0] mb-2')
-                ui.label('No sessions yet').classes('text-[#e4e4e7] font-medium')
-                ui.label('Start streaming to create sessions').classes('text-[#52525b] text-sm')
-        else:
-            with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
-                for session in reversed(sessions):
-                    with ui.card().classes('w-full p-4 cursor-pointer hover:border-[rgba(255,255,255,0.12)]') \
-                        .style('background: #16181d; border-left: 2px solid #5c8af0') \
-                        .on('click', lambda s=session: open_session(s)):
-                        with ui.row().classes('w-full items-center justify-between mb-3'):
-                            with ui.row().classes('items-center gap-3'):
-                                is_live = session.get('status') == 'recording'
-                                ui.label('●').classes('text-xs').style(f'color: {"#22c55e" if is_live else "#52525b"}')
-                                with ui.column().classes('gap-0.5'):
-                                    ui.label(session.get('name', 'Unnamed')).classes('text-white font-medium text-sm')
-                                    ui.label(f"{session.get('packet_count', 0)} pkts · {session.get('metric_count', 0)} metrics").classes('text-[#52525b] text-xs font-mono')
-                            with ui.row().classes('items-center gap-2'):
-                                if is_live:
-                                    ui.label('● LIVE').classes('text-[#22c55e] text-xs font-medium')
-                                ui.label(format_duration(session.get('started_at', ''), session.get('ended_at'))).classes('text-[#71717a] text-xs font-mono')
+    v2 treats a session as a record worth choosing between: name, device,
+    duration, packet/metric/event counts, and a live marker on anything still
+    recording.
+    """
+    global selected_session, current_tab
+
+    sessions_host = ui.column().classes('w-full gap-4')
 
     def open_session(session):
         global selected_session, current_tab
@@ -1786,258 +1792,616 @@ def sessions_page():
         current_tab = 'session-detail'
         rebuild()
 
+    def body():
+        sessions = get_sessions()
+        # Newest first. v1 used reversed(list_sessions()), whose order is
+        # dict-insertion order, so the newest capture was wherever it happened
+        # to be created relative to the others.
+        sessions.sort(key=lambda s: s.get('started_at') or '', reverse=True)
+
+        recording = [s for s in sessions if s.get('status') == 'recording']
+        packets = sum(s.get('packet_count', 0) for s in sessions)
+        metrics = sum(s.get('metric_count', 0) for s in sessions)
+
+        with ui.row().classes('w-full gap-2 flex-wrap items-center'):
+            _sessions_stat('sessions', str(len(sessions)), None)
+            _sessions_stat('recording', str(len(recording)),
+                           'live' if recording else None)
+            _sessions_stat('packets', f'{packets:,}', None)
+            _sessions_stat('metrics', f'{metrics:,}', None)
+
+        if not sessions:
+            with ui.column().classes('us-empty w-full'):
+                with ui.column().classes('gap-2'):
+                    ui.label('No sessions recorded').classes('us-subhead')
+                    ui.label(
+                        'A session is a capture you can come back to: reopen the '
+                        'stream, replay it, and export it. Start one from the '
+                        'Devices screen.'
+                    ).classes('us-body')
+                _btn('Go to Devices', 'us-btn-primary',
+                     _goto_devices)
+            return
+
+        with ui.column().classes('w-full gap-1'):
+            for s in sessions:
+                _session_row(s)
+
+    def _sessions_stat(label, value, token):
+        with ui.column().classes('us-metric-pill !py-2'):
+            ui.label(label).classes('us-micro us-muted')
+            ui.label(value).classes('us-mono').style(
+                f'color: {STATUS[token]}' if token else '')
+
+    def _session_row(session):
+        live = session.get('status') == 'recording'
+        with ui.row().classes(
+                'us-row w-full items-center gap-4 us-row-clickable').on(
+            'click', lambda s=session: open_session(s)):
+            ui.html(f'<span class="us-dot us-dot-{"live" if live else "idle"}">')
+            with ui.column().classes('gap-0.5 flex-1 min-w-0'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.label(session.get('name') or 'Unnamed').classes(
+                        'us-subhead truncate')
+                    if live:
+                        ui.label('RECORDING').classes('us-micro').style(
+                            f'color: {STATUS["live"]}')
+                meta = [f"{session.get('packet_count', 0):,} pkts",
+                        f"{session.get('metric_count', 0):,} metrics"]
+                events = session.get('event_count', 0)
+                if events:
+                    meta.append(f'{events:,} events')
+                device = session.get('device_id')
+                if device:
+                    meta.append(str(device)[:24])
+                ui.label(' · '.join(meta)).classes('us-micro us-muted truncate')
+            with ui.column().classes('items-end gap-0.5 shrink-0'):
+                ui.label(format_duration(
+                    session.get('started_at', ''), session.get('ended_at'))
+                ).classes('us-mono us-micro us-muted')
+                ui.label((session.get('started_at') or '')[:19].replace(
+                    'T', ' ')).classes('us-micro us-muted')
+            ui.html(icon('chevron', 16, 'us-muted'))
+
+    def refresh_sessions():
+        sessions_host.clear()
+        with sessions_host:
+            body()
+
     refresh_sessions()
+
+def _export_json(packets, metrics_by_name, session=None):
+    """Export the session's metrics as JSON.
+
+    Read `id` for the filename: v1 used session['session_id'], which no producer
+    writes, so every export was named session_unknown.json.
+    """
+    sid = ((session or selected_session or {}).get('id') or 'unknown')[:8]
+    data = {
+        'session': (session or selected_session or {}),
+        'metrics': {
+            name: history for name, history in metrics_by_name.items()
+        },
+    }
+    raw = json.dumps(data, indent=2, default=str).encode()
+    filename = f'session_{sid}.json'
+    ui.download.bytes(raw, filename)
+    ui.notify(f'Exported {filename}', type='positive')
+
+
+def _export_csv(metrics_by_name, session=None):
+    import io
+    output = io.StringIO()
+    output.write('timestamp,metric,value,unit\n')
+    rows = 0
+    for name, history in metrics_by_name.items():
+        for m in history:
+            output.write(
+                f"{m.get('timestamp') or m.get('ts','')},"
+                f"{name},{m.get('value')},{m.get('unit') or ''}\n")
+            rows += 1
+    sid = ((session or selected_session or {}).get('id') or 'unknown')[:8]
+    filename = f'session_{sid}.csv'
+    ui.download.bytes(output.getvalue().encode(), filename)
+    ui.notify(f'Exported {filename} ({rows:,} rows)', type='positive')
+
+
+def _export_bundle(packets, metrics_by_name, events, session=None):
+    """A .uartscope bundle: the shareable capture.
+
+    Unlike the JSON and CSV exports this includes the raw packets, which is the
+    only reason the format exists.
+    """
+    import io
+    import zipfile
+    descriptor = {
+        'version': '2.0',
+        'type': 'uartscope-session',
+        'session': (session or selected_session or {}),
+        'metrics': metrics_by_name,
+        'packet_count': len(packets),
+        'event_count': len(events),
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('session.json', json.dumps(descriptor, indent=2, default=str))
+        zf.writestr('packets.json', json.dumps(packets, indent=2, default=str))
+        csv_out = io.StringIO()
+        csv_out.write('timestamp,metric,value,unit\n')
+        for name, history in metrics_by_name.items():
+            for m in history:
+                csv_out.write(
+                    f"{m.get('timestamp') or m.get('ts','')},"
+                    f"{name},{m.get('value')},{m.get('unit') or ''}\n")
+        zf.writestr('metrics.csv', csv_out.getvalue())
+    sid = ((session or selected_session or {}).get('id') or 'unknown')[:8]
+    filename = f'session_{sid}.uartscope'
+    ui.download.bytes(buffer.getvalue(), filename)
+    ui.notify(f'Exported {filename}', type='positive')
+
+
+def _diff_tab(session, packets, metrics_by_name):
+    """Compare a session against a golden baseline.
+
+    The baseline lives in this function's closure, not on disk, so it is
+    per-session-page. That is a deliberate scope choice, not an oversight:
+    a golden set that outlives the process would need a versioned store, and
+    a golden that silently changes meaning between runs is worse than one that
+    is visibly session-scoped.
+    """
+    golden = {'set': False, 'name': '', 'packet_count': 0, 'metrics': {}}
+    tolerance = {'pct': 5.0}
+
+    with ui.column().classes('w-full gap-3'):
+        ui.label('Diff against golden').classes('us-label us-muted')
+        ui.label(
+            'Mark a session as the expected result, then check a later capture '
+            'against it. Useful in CI, where "the values changed" is the alert.'
+        ).classes('us-body')
+
+        status = ui.label('No golden set').classes('us-body us-muted')
+        results = ui.column().classes('w-full gap-2')
+
+        def mark_golden():
+            if not packets and not metrics_by_name:
+                ui.notify('Nothing recorded to mark as golden', type='warning')
+                return
+            golden['set'] = True
+            golden['name'] = session.get('name') or 'Unnamed'
+            golden['packet_count'] = len(packets)
+            golden['metrics'] = {
+                name: history[-1].get('value')
+                for name, history in metrics_by_name.items()
+                if history and isinstance(history[-1].get('value'), (int, float))
+            }
+            status.text = f"Golden: {golden['name']} — {len(packets):,} pkts"
+            ui.notify('Marked as golden', type='positive')
+
+        with ui.row().classes('w-full items-center gap-3 flex-wrap'):
+            _btn('Mark this session as golden', 'us-btn-primary', mark_golden)
+            with ui.column().classes('gap-1 w-40'):
+                ui.label('Tolerance').classes('us-micro us-muted')
+                tol = ui.number('Tolerance (%)', value=5, min=0, max=100) \
+                    .classes('w-full us-input').props('outlined dense')
+                tol.on_value_change(
+                    lambda e: tolerance.update(pct=float(e.value or 0)))
+
+        def run_diff():
+            results.clear()
+            with results:
+                if not golden['set']:
+                    # The v1 bug: an empty golden set produced an empty loop,
+                    # which left `passed` at its initial True and reported
+                    # success. Comparing against nothing is a failure.
+                    _diff_row('Golden set', 'a marked session', 'none', '--',
+                              False)
+                    return
+
+                rows = []
+                ok = True
+
+                # Packet count
+                expected = golden['packet_count']
+                actual = len(packets)
+                diff_pct = abs(actual - expected) / max(expected, 1) * 100
+                match = diff_pct <= tolerance['pct']
+                ok = ok and match
+                rows.append(('Packet count', f'{expected:,}', f'{actual:,}',
+                             f'{diff_pct:.1f}%', match))
+
+                # Metric latest values
+                for name, expected_val in golden['metrics'].items():
+                    history = metrics_by_name.get(name) or []
+                    actual_val = history[-1].get('value') if history else None
+                    if not isinstance(actual_val, (int, float)):
+                        rows.append((f'Metric: {name}', f'{expected_val:g}',
+                                     'missing', '--', False))
+                        ok = False
+                        continue
+                    if expected_val:
+                        pct = abs(actual_val - expected_val) \
+                            / abs(expected_val) * 100
+                    else:
+                        pct = 0.0 if actual_val == 0 else 100.0
+                    match = pct <= tolerance['pct']
+                    ok = ok and match
+                    rows.append((f'Metric: {name}', f'{expected_val:g}',
+                                 f'{actual_val:g}', f'{pct:.1f}%', match))
+
+                # Metrics present now but not in the golden set are new
+                # behaviour and worth surfacing rather than ignoring.
+                for name in metrics_by_name:
+                    if name not in golden['metrics']:
+                        rows.append((f'Metric: {name}', 'not in golden',
+                                     'present', '--', False))
+                        ok = False
+
+                for r in rows:
+                    _diff_row(*r)
+
+                ui.label('PASS' if ok else 'FAIL').classes(
+                    'us-subhead').style(
+                    f"color: {STATUS['live'] if ok else STATUS['error']}")
+
+        _btn('Run diff', 'us-btn-secondary', run_diff)
+
+
+def _diff_row(name, expected, actual, diff, passed):
+    token = 'live' if passed else 'error'
+    with ui.row().classes('us-row w-full items-center gap-3'):
+        ui.html(f'<span class="us-dot us-dot-{token}">')
+        with ui.column().classes('flex-1 min-w-0 gap-0.5'):
+            ui.label(name).classes('us-subhead truncate')
+            ui.label(f'expected {expected}  ·  actual {actual}') \
+                .classes('us-micro us-muted')
+        ui.label(diff).classes('us-mono us-micro us-muted')
+        ui.label('pass' if passed else 'fail').classes('us-micro').style(
+            f"color: {STATUS[token]}")
+
+
+def _loaded_session_data():
+    """The real packet/metric history for the selected session.
+
+    load_session() is a coroutine and this runs inside NiceGUI's already-running
+    event loop, so it cannot simply be awaited. Two details matter:
+
+      * It runs on a *private thread* with its own loop. Reusing the running
+        loop raises "Cannot run the event loop while another loop is running",
+        which is exactly what happened when this first tried new_event_loop()
+        + run_until_complete on the main thread.
+      * get_all_packets() / get_all_metrics() are the synchronous read paths and
+        are preferred when available, so the common case does no thread hop at
+        all.
+
+    Returns {} rather than raising, so a missing or corrupt file degrades to the
+    screen's own empty state instead of a traceback.
+    """
+    session_id = (selected_session or {}).get('id', '')
+    if not session_id:
+        return {}
+
+    # Synchronous path first.
+    for attr in ('get_session_data', 'get_all_packets'):
+        fn = getattr(session_recorder, attr, None)
+        if fn is None:
+            continue
+        try:
+            data = fn(session_id)
+        except Exception:
+            logger.exception('sync session read failed via %s', attr)
+            continue
+        if data:
+            if isinstance(data, dict):
+                return data
+            return {'packets': list(data)}
+
+    # Async path on a private thread, so it cannot collide with the running loop.
+    import concurrent.futures
+    try:
+        def _run():
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(
+                    session_recorder.load_session(session_id)) or {}
+            finally:
+                loop.close()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_run).result(timeout=10) or {}
+    except Exception:
+        logger.exception('could not load session %s', session_id)
+        return {}
 
 
 def session_detail_page():
+    """Session detail: replay a capture, inspect it, export it.
 
-    _bind_session_detail_page, _late_session_detail_page = _late_bindings()
-    """Session detail with timeline replay."""
+    v1's detail screen opened on a tab that said "Timeline replay coming soon"
+    and another that said "Metrics chart coming soon". Those were the two things
+    you came to a session for. The reason they were empty is worth recording:
+    SessionRecorder.load_session() existed the whole time and returned the full
+    packet and metric history from disk, but nothing in the UI ever called it.
+    The data was already there; the screen just never asked for it.
+
+    v2 loads the session and gives you a working replay over the real packets,
+    with a scrubber, and the same follow-mode discipline the Terminal uses: if
+    the user seeks away from the playhead, stop yanking them back.
+    """
     global selected_session
 
     if not selected_session:
-        ui.label('No session selected').classes('text-[#52525b]').style('padding: 40px')
+        needs_device(
+            'No session selected',
+            'Pick a capture from the Sessions list to replay it and export it.')
         return
 
     session = selected_session
+    session_id = session.get('id', '')
+
+    data = _loaded_session_data()
+
+    packets = list(data.get('packets') or [])
+    metrics_by_name = {}
+    for m in data.get('metrics') or []:
+        metrics_by_name.setdefault(m.get('name'), []).append(m)
+    events = list(data.get('events') or [])
+
+    # ── Replay state ─────────────────────────────────────────────────────
+    # Index into `packets`, not a wall-clock timer: the session's own
+    # timestamps are what "replay" means, and a session that was recorded over
+    # an hour must not take an hour to play back.
+    state = {'index': 0, 'playing': False, 'speed': 1.0}
 
     with ui.column().classes('w-full gap-4'):
-        with ui.row().classes('w-full items-center gap-3'):
-            ui.button('← Back', on_click=_late_session_detail_page('go_back')).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
-            with ui.column():
-                ui.label(session.get('name', 'Unnamed')).classes('text-white font-medium')
-                ui.label(f"{session.get('packet_count', 0)} packets").classes('text-[#52525b] text-xs')
+        with ui.row().classes('w-full items-center gap-3 flex-wrap'):
+            _btn('Back', 'us-btn-ghost', _goto_sessions)
+            with ui.column().classes('gap-0.5 flex-1 min-w-0'):
+                ui.label(session.get('name') or 'Unnamed').classes(
+                    'us-display truncate')
+                sub = [f"{len(packets):,} packets",
+                       f"{sum(len(v) for v in metrics_by_name.values()):,} metrics",
+                       format_duration(
+                           session.get('started_at', ''),
+                           session.get('ended_at'))]
+                ui.label(' · '.join(sub)).classes('us-micro us-muted')
 
-        # Tabs
+        if not packets and not metrics_by_name:
+            with ui.column().classes('us-empty w-full'):
+                with ui.column().classes('gap-2'):
+                    ui.label('This session has no recorded data').classes(
+                        'us-subhead')
+                    ui.label(
+                        'A session only holds what was captured while it was '
+                        'recording. If it was stopped without a stream, or the '
+                        'file was moved, there is nothing to replay.'
+                    ).classes('us-body')
+                _btn('Back to sessions', 'us-btn-secondary', _goto_sessions)
+            return
+
+        # ── Tabs ──────────────────────────────────────────────────────────
         tabs = ui.tabs().classes('w-full')
         with tabs:
-            t1 = ui.tab('Timeline')
-            t2 = ui.tab('Metrics')
-            t3 = ui.tab('Export')
-            t4 = ui.tab('🧪 Diff Test')
+            t_replay = ui.tab('Replay')
+            t_metrics = ui.tab('Metrics')
+            t_export = ui.tab('Export')
+            t_diff = ui.tab('Diff')
 
-        with ui.tab_panels(tabs, value=t1).classes('w-full p-0'):
-            with ui.tab_panel(t1):
-                with ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto'):
-                    with ui.row().classes('w-full items-center gap-3'):
-                        ui.button('▶ Replay', on_click=_late_session_detail_page('start_replay')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
-                        ui.select([0.5, 1, 2, 5, 10], value=1).classes('bg-[rgba(255,255,255,0.02)] text-[#e4e4e7] border border-[rgba(255,255,255,0.10)] px-2 py-1 text-sm rounded-lg')
-                        ui.label(f"0 packets").classes('text-[#71717a] text-xs font-mono')
+        with ui.tab_panels(tabs, value=t_replay).classes('w-full p-0'):
 
-                    ui.label('Timeline replay coming soon').classes('text-[#52525b] text-sm py-4')
+            # ── Replay ────────────────────────────────────────────────────
+            with ui.tab_panel(t_replay):
+                with ui.column().classes('w-full gap-3'):
+                    transport = ui.row().classes(
+                        'w-full items-center gap-2 flex-wrap')
 
-            with ui.tab_panel(t2):
-                ui.label('Metrics chart coming soon').classes('text-[#52525b] py-8')
+                    progress = ui.slider(
+                        min=0,
+                        max=max(len(packets) - 1, 1),
+                        value=0,
+                    ).classes('w-full').props('label-always')
 
-            with ui.tab_panel(t3):
-                with ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto'):
-                    ui.label('Export & Share').classes('text-white font-medium')
-                    with ui.row().classes('w-full gap-2'):
-                        ui.button('Export JSON', on_click=lambda: export_json()).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg flex-1')
-                        ui.button('Export CSV', on_click=lambda: export_csv()).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-4 py-2 rounded-lg flex-1')
-                    ui.button('📦 Share Bundle (.uartscope)', on_click=lambda: export_bundle()).classes('bg-[#5c8af0] text-white px-4 py-2 rounded-lg w-full')
+                    readout = ui.column().classes('w-full gap-1')
+                    _render_packets(readout, packets, 0)
 
-                    ui.label('Sharing exports session metadata + metrics. Does NOT include raw serial data. Others can open the bundle to view the session.').classes('text-[#52525b] text-[10px]')
+                    async def tick():
+                        while True:
+                            await asyncio.sleep(0.25)
+                            if not state['playing']:
+                                continue
+                            nxt = state['index'] + 1
+                            if nxt >= len(packets):
+                                state['playing'] = False
+                                _paint_transport()
+                                break
+                            state['index'] = nxt
+                            progress.value = nxt
+                            readout.clear()
+                            with readout:
+                                _render_packets(readout, packets, nxt)
 
-            def export_json():
-                filename = f"session_{session.get('id', 'unknown')[:8]}.json"
-                data = {
-                    'session': session,
-                    'metrics': {},
-                }
-                for mn, hist in telemetry_engine.get_all_metrics(session.get('device_id', '')).items():
-                    data['metrics'][mn] = [{'timestamp': m.timestamp.isoformat(), 'name': m.name, 'value': m.value, 'unit': m.unit} for m in hist]
-                raw = json.dumps(data, indent=2, default=str).encode()
-                ui.download.bytes(raw, filename)
-                ui.notify(f'Exported: {filename}', type='positive')
+                    def _paint_transport():
+                        """Rebuild only the transport row.
 
-            def export_csv():
-                import io
-                output = io.StringIO()
-                output.write('timestamp,metric,value,unit\n')
-                for mn, history in telemetry_engine.get_all_metrics(session.get('device_id', '')).items():
-                    for m in history:
-                        output.write(f"{m.timestamp.isoformat()},{m.name},{m.value},{m.unit or ''}\n")
-                raw = output.getvalue().encode()
-                ui.download.bytes(raw, f"session_{session.get('id', 'unknown')[:8]}.csv")
-                ui.notify('CSV exported', type='positive')
+                        Rebuilding the whole panel on every tick would tear down
+                        and rebuild the log 4x a second; at 10x that is 40 full
+                        re-renders a second, which locks the browser up.
+                        """
+                        transport.clear()
+                        with transport:
+                            play_btn = _btn(
+                                'Pause' if state['playing'] else 'Play',
+                                'us-btn-primary',
+                                _toggle_play)
+                            # With a dict of options, NiceGUI wants the KEY
+                            # as the value, not the mapped value. Passing 1.0
+                            # raises "Invalid value: 1.0" at construction.
+                            speed = ui.select(
+                                {'0.5×': 0.5, '1×': 1.0, '2×': 2.0,
+                                 '5×': 5.0, '20×': 20.0},
+                                value='1×', label='Speed',
+                            ).classes('w-28 us-input').props('outlined dense')
+                            speed.on_value_change(
+                                lambda e: state.update(
+                                    speed=(
+                                        {'0.5×': 0.5, '1×': 1.0, '2×': 2.0,
+                                         '5×': 5.0, '20×': 20.0}.get(e.value, 1.0)
+                                    if e.value else 1.0)))
+                            _btn('Restart', 'us-btn-ghost', _restart)
+                            ui.label(
+                                f"packet {state['index'] + 1} of {len(packets)}"
+                            ).classes('us-mono us-micro us-muted')
 
-            def export_bundle():
-                import os, zipfile, io
-                descriptor = {
-                    'version': '1.0',
-                    'type': 'uartscope-session',
-                    'session': {k: v for k, v in session.items()},
-                    'metrics': {},
-                }
-                for mn, hist in telemetry_engine.get_all_metrics(session.get('device_id', '')).items():
-                    descriptor['metrics'][mn] = [{'timestamp': m.timestamp.isoformat(), 'name': m.name, 'value': m.value, 'unit': m.unit} for m in hist]
+                    def _toggle_play():
+                        if state['playing']:
+                            state['playing'] = False
+                        else:
+                            if state['index'] >= len(packets) - 1:
+                                state['index'] = 0
+                            state['playing'] = True
+                        _paint_transport()
 
-                # Build zip in memory
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    zf.writestr('session.json', json.dumps(descriptor, indent=2, default=str))
-                    csv_output = io.StringIO()
-                    csv_output.write('timestamp,metric,value,unit\n')
-                    for mn, hist in descriptor['metrics'].items():
-                        for m_dict in hist:
-                            csv_output.write(f"{m_dict['timestamp']},{m_dict['name']},{m_dict['value']},{m_dict.get('unit', '')}\n")
-                    zf.writestr('metrics.csv', csv_output.getvalue())
+                    def _restart():
+                        state['index'] = 0
+                        state['playing'] = False
+                        progress.value = 0
+                        readout.clear()
+                        with readout:
+                            _render_packets(readout, packets, 0)
+                        _paint_transport()
 
-                ui.download.bytes(zip_buffer.getvalue(), f"session_{session.get('id', 'unknown')[:8]}.uartscope")
-                ui.notify('Bundle exported!', type='positive')
+                    progress.on_value_change(
+                        lambda e: _seek(int(e.value or 0)))
 
-            with ui.tab_panel(t4):
-                # Golden Session Diff Tab
-                with ui.column().classes('w-full gap-4'):
-                    ui.label('Automated Session Diff').classes('text-white font-medium')
-                    ui.label('Mark this session as "golden" (expected behavior), then compare new sessions against it. Perfect for CI pipelines.').classes('text-[#71717a] text-xs')
+                    def _seek(index):
+                        state['index'] = max(0, min(index, len(packets) - 1))
+                        state['playing'] = False
+                        readout.clear()
+                        with readout:
+                            _render_packets(readout, packets, state['index'])
+                        _paint_transport()
 
-                    with ui.row().classes('w-full gap-3 items-center'):
-                        golden_status = ui.label('⚪ No golden session set').classes('text-[#52525b] text-sm flex-1')
-                        ui.button('⭐ Mark as Golden', on_click=lambda: mark_as_golden()).classes('bg-[#eab308] text-white px-3 py-1.5 text-sm rounded-lg')
+                    _paint_transport()
+                    asyncio.create_task(tick())
 
-                    # Diff criteria
-                    with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-                        ui.label('Diff Criteria').classes('text-white font-medium text-sm mb-2')
-                        check_metrics = ui.checkbox('Compare metric values', value=True).classes('text-[#71717a] text-xs')
-                        check_packet_count = ui.checkbox('Compare packet counts', value=True).classes('text-[#71717a] text-xs')
-                        check_errors = ui.checkbox('Compare error patterns', value=True).classes('text-[#71717a] text-xs')
-                        tolerance = ui.number('Tolerance (%)', value=5, min=0, max=100).classes('w-full mb-2').props('outlined dense').style('color: #e4e4e7')
+            # ── Metrics ───────────────────────────────────────────────────
+            with ui.tab_panel(t_metrics):
+                with ui.column().classes('w-full gap-3'):
+                    if not metrics_by_name:
+                        ui.label(
+                            'No metrics were recorded in this session.'
+                        ).classes('us-body us-muted')
+                    else:
+                        # Same rule as the Charts screen: never plot quantities
+                        # with different units on one axis.
+                        by_unit = {}
+                        for name, hist in metrics_by_name.items():
+                            unit = (hist[-1].get('unit') if hist else None) or '—'
+                            by_unit.setdefault(unit, []).append((name, hist))
+                        ui.label(
+                            f'{len(metrics_by_name)} metrics in '
+                            f'{len(by_unit)} unit groups').classes(
+                            'us-micro us-muted')
+                        for unit, series in by_unit.items():
+                            _replay_sparkline(unit, series)
 
-                    # Compare button
-                    ui.button('🧪 Run Diff Against Golden', on_click=lambda: run_diff()).classes('bg-[#5c8af0] text-white px-4 py-2 rounded-lg w-full')
+            # ── Export ────────────────────────────────────────────────────
+            with ui.tab_panel(t_export):
+                with ui.column().classes('w-full gap-3'):
+                    ui.label('Export').classes('us-label us-muted')
+                    ui.label(
+                        'Exports the metrics this session recorded. Raw packets '
+                        'are included in the bundle only.'
+                    ).classes('us-body')
+                    with ui.row().classes('w-full gap-2 flex-wrap'):
+                        _btn('JSON', 'us-btn-secondary',
+                             lambda: _export_json(packets, metrics_by_name))
+                        _btn('CSV', 'us-btn-secondary',
+                             lambda: _export_csv(metrics_by_name))
+                        _btn('Bundle (.uartscope)',
+                             'us-btn-primary',
+                             lambda: _export_bundle(packets, metrics_by_name,
+                                                    events))
 
-                    # Diff results area
-                    diff_results = ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto')
-
-        # Diff functions (defined in outer scope)
-        current_packets = session.get('packet_count', 0)
-        golden_data = {'packet_count': 0, 'metrics': {}, 'error_count': 0, 'metric_samples': {}}
-
-        def mark_as_golden():
-            # Read the metrics from the engine, keyed by the session's device.
-            # v1 read session['metrics_latest'], a key no part of the product
-            # ever writes, so the golden set was always empty.
-            golden_data['packet_count'] = session.get('packet_count', 0)
-            golden_data['name'] = session.get('name', '')
-            golden_data['metrics'] = {
-                name: hist[-1].value
-                for name, hist in (
-                    telemetry_engine.get_all_metrics(
-                        session.get('device_id', '')) or {}).items()
-                if hist}
-            golden_data['error_count'] = session.get('error_count', 0)
-            golden_data['metric_samples'] = {}
-            golden_status.text = f"⭐ Golden: {golden_data['name']} ({golden_data['packet_count']} pkts)"
-            ui.notify(f"Session marked as golden ({golden_data['packet_count']} packets)", type='positive')
-
-        def run_diff():
-            diff_results.clear()
-            tolerance_val = tolerance.value / 100.0
-            passed = True
-            results = []
-
-            # Compare packet counts
-            if check_packet_count.value:
-                expected = golden_data['packet_count']
-                actual = current_packets
-                diff_pct = abs(actual - expected) / max(expected, 1) * 100
-                match = diff_pct <= (tolerance_val * 100)
-                passed = passed and match
-                results.append({
-                    'name': 'Packet Count',
-                    'expected': str(expected),
-                    'actual': str(actual),
-                    'diff': f"{diff_pct:.1f}%",
-                    'pass': match,
-                })
-
-            # Compare metrics (latest values)
-            if check_metrics.value:
-                # Same source as the golden snapshot above, so both sides of the
-                # comparison come from the engine rather than a field that does
-                # not exist.
-                current_metrics = {
-                    name: hist[-1].value
-                    for name, hist in (
-                        telemetry_engine.get_all_metrics(
-                            session.get('device_id', '')) or {}).items()
-                    if hist}
-                golden_metrics = golden_data.get('metrics', {})
-                if not golden_metrics:
-                    results.append({
-                        'name': 'Metric comparison',
-                        'expected': 'a golden session',
-                        'actual': 'none marked',
-                        'diff': '--',
-                        'pass': False,
-                    })
-                    passed = False
-                for metric_name, golden_val in golden_metrics.items():
-                    if isinstance(golden_val, (int, float)):
-                        current_val = current_metrics.get(metric_name, 0)
-                        if isinstance(current_val, (int, float)):
-                            if golden_val != 0:
-                                pct_diff = abs(current_val - golden_val) / abs(golden_val) * 100
-                            else:
-                                pct_diff = 0 if current_val == 0 else 100
-                            match = pct_diff <= (tolerance_val * 100)
-                            passed = passed and match
-                            results.append({
-                                'name': f"Metric: {metric_name}",
-                                'expected': f"{golden_val}",
-                                'actual': f"{current_val}",
-                                'diff': f"{pct_diff:.1f}%",
-                                'pass': match,
-                            })
-
-            # Compare error counts
-            if check_errors.value:
-                golden_errors = golden_data['error_count']
-                current_errors = session.get('error_count', 0)
-                match = current_errors == golden_errors
-                passed = passed and match
-                results.append({
-                    'name': 'Error Count',
-                    'expected': str(golden_errors),
-                    'actual': str(current_errors),
-                    'diff': '0' if match else f"+{current_errors - golden_errors}",
-                    'pass': match,
-                })
-
-            # Render results
-            with diff_results:
-                if passed:
-                    with ui.card().classes('w-full p-3').style('background: rgba(39,166,68,0.1); border: 1px solid rgba(39,166,68,0.3)'):
-                        ui.label('✅ ALL CHECKS PASSED').classes('text-[#22c55e] font-medium')
-                else:
-                    with ui.card().classes('w-full p-3').style('background: rgba(229,72,77,0.1); border: 1px solid rgba(229,72,77,0.3)'):
-                        ui.label('❌ TEST FAILED').classes('text-[#ef4444] font-medium')
-
-                for r in results:
-                    color = '#22c55e' if r['pass'] else '#ef4444'
-                    icon = '✓' if r['pass'] else '✗'
-                    with ui.row().classes('w-full items-center gap-3 p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
-                        ui.label(icon).style(f'color: {color}').classes('text-sm')
-                        ui.label(r['name']).classes('text-[#e4e4e7] text-xs flex-1')
-                        ui.label(f"Expected: {r['expected']}").classes('text-[#71717a] text-xs font-mono')
-                        ui.label(f"Actual: {r['actual']}").classes('text-[#e4e4e7] text-xs font-mono')
-                        ui.label(f"Δ {r['diff']}").style(f'color: {color}').classes('text-xs font-mono')
-
-    def _go_back_impl():
-        global current_tab, selected_session
-        current_tab = 'sessions'
-        selected_session = None
-        rebuild()
-
-    _bind_session_detail_page('go_back', _go_back_impl)
-
-    async def _start_replay_impl():
-        ui.notify('Replay started', type='info')
+            # ── Diff ──────────────────────────────────────────────────────
+            with ui.tab_panel(t_diff):
+                _diff_tab(session, packets, metrics_by_name)
 
 
-    _bind_session_detail_page('start_replay', _start_replay_impl)
+def _render_packets(host, packets, upto):
+    """Render the packets visible at a replay position, newest last.
+
+    Shows a window rather than everything: a long capture would otherwise
+    render thousands of rows on a single seek.
+    """
+    if not packets:
+        return
+    window = packets[:upto + 1]
+    # Keep the tail, not the head: during replay the newest line is the point.
+    shown = window[-400:]
+    skipped = len(window) - len(shown)
+    with host:
+        if skipped:
+            ui.label(f'{skipped:,} earlier packets not shown').classes(
+                'us-micro us-muted')
+        with ui.column().classes('us-log w-full'):
+            for p in shown:
+                ts = (p.get('ts') or p.get('timestamp') or '')[:19]
+                text = p.get('data') or p.get('line') or p.get('raw') or str(p)
+                _log_line(f'{ts[11:]}  {text}' if ts else str(text),
+                          p.get('level') or '')
+
+
+def _replay_sparkline(unit, series):
+    """One unit group from a recorded session: name, range, latest, trend."""
+    with ui.column().classes('us-row w-full items-center gap-4'):
+        ui.label(unit).classes('us-unit')
+        with ui.column().classes('flex-1 min-w-0 gap-0.5'):
+            for name, hist in series[:6]:
+                vals = [m.get('value') for m in hist
+                        if isinstance(m.get('value'), (int, float))]
+                if not vals:
+                    continue
+                trend = 'up' if vals[-1] > vals[0] else (
+                    'down' if vals[-1] < vals[0] else 'flat')
+                with ui.row().classes('items-baseline gap-3 flex-wrap'):
+                    ui.label(name).classes('us-mono us-micro truncate')
+                    ui.label(
+                        f'min {min(vals):g}  max {max(vals):g}  '
+                        f'n={len(vals)}').classes('us-micro us-muted')
+                    ui.label(f'latest {vals[-1]:g}').classes(
+                        'us-mono us-micro us-muted')
+                    ui.label(f'▲ {trend}' if trend != 'flat' else '— flat'
+                             ).classes('us-micro').style(
+                        f'color: {STATUS["warn"] if trend == "up" else TEXT["muted"]}')
+        if len(series) > 6:
+            ui.label(f'+{len(series) - 6} more').classes('us-micro us-muted')
+
+
+def _log_line(text, level=''):
+    """One line in a log surface, classified by content.
+
+    Shared by the Terminal and the session replay so a packet looks the same in
+    both: the same signal, inspected live and inspected after the fact, should
+    not have two different colour languages.
+    """
+    kind = (level or '').lower()
+    if not kind:
+        lowered = text.lower()
+        if any(w in lowered for w in ('error', 'fail', 'exception', 'abort')):
+            kind = 'error'
+        elif any(w in lowered for w in ('warn', 'timeout', 'retry')):
+            kind = 'warn'
+        elif text.strip().startswith(('{', '[')):
+            kind = 'json'
+        else:
+            kind = 'plain'
+    ui.label(text).classes(f'us-log-line us-log-{kind}')
+
+
+def _goto_sessions():
+    global selected_session, current_tab
+    current_tab = 'sessions'
+    rebuild()
+
 def performance_page():
     """Performance Analytics - packet rate, throughput, latency, errors, uptime."""
     def refresh_performance():
@@ -2757,6 +3121,71 @@ def _seed_demo_alerts():
 
 
 @ui.page('/')
+def _seed_demo_session():
+    """Record a real session into the real recorder, for previewing the replay.
+
+    Uses session_recorder's own API and telemetry_engine.process_line, so what
+    the detail screen loads is exactly what a genuine capture produces -- same
+    keys, same shapes, same disk round trip. A hand-built dict would prove
+    nothing about the screen.
+
+    Runs on a private thread with its own event loop, because the page is built
+    inside NiceGUI's already-running loop and a nested run_until_complete
+    raises "Cannot run the event loop while another loop is running".
+
+    Idempotent: does nothing if any session already exists.
+    """
+    if session_recorder.list_sessions():
+        return
+
+    import concurrent.futures
+
+    sid = 'demo0session'
+    samples = [
+        'TEMP:22.4', 'HUMIDITY:44.1', 'RSSI:-58', 'VOLTAGE:3.31',
+        'TEMP:22.9', 'RSSI:-61', 'ERROR: sensor timeout on bus 2',
+        'TEMP:23.4', 'HUMIDITY:45.0', 'VOLTAGE:3.29',
+        'TEMP:24.1', 'WARN: retrying read', 'RSSI:-64',
+        'TEMP:25.2', 'HUMIDITY:46.3', 'VOLTAGE:3.34',
+        'TEMP:26.0', 'RSSI:-67', 'TEMP:27.3',
+        'HUMIDITY:47.8', 'ERROR: checksum mismatch frame 0x1A',
+        'TEMP:28.1', 'RSSI:-70', 'VOLTAGE:3.36', 'TEMP:29.4',
+    ]
+
+    def _record():
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(session_recorder.start_session(
+                sid, device_id='demo-device',
+                name='Bench run — thermal sweep'))
+            for line in samples:
+                loop.run_until_complete(session_recorder.record_packet(
+                    sid, {'data': line, 'level': (
+                        'error' if 'ERROR' in line else
+                        'warn' if 'WARN' in line else 'info')}))
+                parsed = loop.run_until_complete(
+                    telemetry_engine.process_line('demo-device', sid, line))
+                # record_metric has no caller anywhere in the product, so a
+                # recorded session has always had an empty metric list. Record
+                # them here, from the real parse, rather than re-parsing.
+                for metric in getattr(parsed, 'metrics', None) or []:
+                    loop.run_until_complete(session_recorder.record_metric(
+                        sid, {'name': metric.name, 'value': metric.value,
+                              'unit': metric.unit,
+                              'timestamp': metric.timestamp.isoformat()}))
+            loop.run_until_complete(session_recorder.record_event(
+                sid, {'type': 'error', 'message': 'bus 2 timeout'}))
+            loop.run_until_complete(session_recorder.stop_session(sid))
+        finally:
+            loop.close()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_record).result(timeout=15)
+    except Exception:
+        logger.exception('demo session seed failed')
+
+
 @ui.page('/smoke/{tab}')
 def main_page(tab: str = 'devices', with_device: bool = False):
     """Build the shell.
@@ -2771,9 +3200,12 @@ def main_page(tab: str = 'devices', with_device: bool = False):
     screens that need one build a completely different tree, and reviewing only
     the no-device path would miss most of their code.
     """
-    global content_container, current_tab, selected_device
+    global content_container, current_tab, selected_device, selected_session
 
-    if tab in NAV_TAB_IDS:
+    # 'session-detail' is reached by choosing a session, not from the rail, so it
+    # is not in NAV_TAB_IDS. Allow it explicitly or the smoke route can never
+    # reach the one screen that most needed testing.
+    if tab in NAV_TAB_IDS or tab == 'session-detail':
         current_tab = tab
 
     if with_device and selected_device is None:
@@ -2781,6 +3213,12 @@ def main_page(tab: str = 'devices', with_device: bool = False):
         _seed_demo_telemetry()
     if with_device and tab == 'alerts':
         _seed_demo_alerts()
+    if with_device and tab in ('sessions', 'session-detail'):
+        _seed_demo_session()
+        if tab == 'session-detail' and selected_session is None:
+            sessions = get_sessions()
+            if sessions:
+                selected_session = sessions[0]
 
     # v2 design system: tokens + Inter/JetBrains Mono. Must run before any
     # screen is built so the first paint is already themed.
