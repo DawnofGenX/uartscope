@@ -1,0 +1,9 @@
+# Normalize line endings in-repo so surgical diffs stay surgical.
+# Repo was authored on Windows (core.autocrlf=true locally) with no .gitattributes,
+# which risks whole-file diffs on a 1711-line file under v2.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.spec text eol=lf
