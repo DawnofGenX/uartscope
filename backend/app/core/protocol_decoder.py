@@ -61,12 +61,20 @@ class UARTTextDecoder(ProtocolDecoder):
     def can_decode(self, raw_data: bytes) -> float:
         try:
             text = raw_data.decode("utf-8")
+            if not text.strip():
+                return 0.0
             if text.startswith("AT+") or text.startswith("AT"):
                 return 0.9
             if text.startswith("$G"):
                 return 0.95
-            if any(c.isalpha() for c in text) and text.strip().endswith("\n"):
-                return 0.5
+            # Printable ASCII is text, newline or not. v1 required a trailing
+            # "\n" here, so ordinary pasted payloads like "hello" or
+            # "TEMP:23.4" scored 0.0 and auto-detect handed them to i2c
+            # instead, which scored 0.6 on length alone.
+            if all(32 <= ord(c) < 127 or c in "\r\n\t" for c in text):
+                # KEY:VALUE telemetry and free text are equally text; a colon
+                # is a weak signal, not a discriminator, so no bonus here.
+                return 0.7
         except (UnicodeDecodeError, AttributeError):
             pass
         return 0.0
@@ -173,6 +181,13 @@ class I2CDecoder(ProtocolDecoder):
 
     def can_decode(self, raw_data: bytes) -> float:
         if len(raw_data) < 3:
+            return 0.0
+        # An I2C frame is binary. A run of printable ASCII is a text payload
+        # that happens to start with a byte whose upper bits name a known
+        # address -- 0x20 is a space, and 0x20 >> 1 == 0x10 is in
+        # KNOWN_ADDRESSES, so " hello" scored 0.6 as I2C. Refuse ASCII rather
+        # than inventing an address for a string.
+        if all(32 <= b < 127 or b in (9, 10, 13) for b in raw_data):
             return 0.0
         # I2C packet format: [addr_w/r][data...][ack]
         addr_byte = raw_data[0]

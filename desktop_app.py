@@ -114,6 +114,12 @@ def get_sessions():
 # The rail collapses to icons below 1024px via CSS; because the label is real
 # text rather than a title attribute, the accessible name survives the collapse.
 
+# The live line buffer, shared between the Terminal (which fills it from the
+# serial reader) and the Decoder (whose live mode consumes it). It was a local
+# of terminal_page(), which made it unreachable from any other screen.
+_LINE_BUFFER: dict[str, list] = {'lines': []}
+
+
 NAV_ITEMS = [
     ('devices', 'devices', 'Devices', True),
     ('terminal', 'terminal', 'Terminal', True),
@@ -694,10 +700,14 @@ def terminal_page():
         return
 
     # ── State ────────────────────────────────────────────────────────────
+    # 'lines' lives in _LINE_BUFFER (module level) so the Decoder's live mode
+    # can read the same incoming stream. The rest is per-visit UI state and
+    # deliberately stays local.
     terminal_state = {
-        'lines': [], 'search': '', 'case_sensitive': False, 'regex': False,
-        'match_count': 0, 'current_match': 0, 'filter_level': 'all',
-        'filter_metric': '', 'follow': True, 'pending': 0, 'rendered': 0,
+        'lines': _LINE_BUFFER['lines'], 'search': '', 'case_sensitive': False,
+        'regex': False, 'match_count': 0, 'current_match': 0,
+        'filter_level': 'all', 'filter_metric': '', 'follow': True,
+        'pending': 0, 'rendered': 0,
     }
     command_history = []   # [{'cmd': str, 'timestamp': str}]
     macros = [{'name': 'Scan I2C', 'commands': ['AA', 'BB']}]
@@ -1624,7 +1634,8 @@ def alerts_page():
                     ).classes('w-28 us-input').props('outlined dense')
                     sev.bind_value(view, 'severity')
                     sev.on_value_change(lambda: refresh_alerts())
-                    _btn('Show acked', 'us-btn-ghost', _toggle_acked)
+                    _btn('Show acked', 'us-btn-ghost',
+                         _late_alerts_page('toggle_acked'))
                     unacked = [a for a in get_alert_events()
                                if not a.get('acknowledged')]
                     if unacked:
@@ -1644,7 +1655,8 @@ def alerts_page():
                                 'No unacknowledged alerts. New ones appear here '
                                 'as the stream crosses a rule threshold.'
                             ).classes('us-body')
-                        _btn('Show acknowledged', 'us-btn-ghost', _toggle_acked)
+                        _btn('Show acknowledged', 'us-btn-ghost',
+                             _late_alerts_page('toggle_acked'))
                 return
 
             with ui.column().classes('w-full gap-1'):
@@ -1655,7 +1667,7 @@ def alerts_page():
                     f'{len(shown) - 100:,} older alerts not shown — narrow the '
                     f'filter').classes('us-micro us-muted')
 
-    def _toggle_acked():
+    def _toggle_acked_impl():
         view['show_acked'] = not view['show_acked']
         refresh_alerts()
 
@@ -1765,6 +1777,9 @@ def alerts_page():
                             else 'warning' if token == 'warn' else 'info'),
                             timeout=6000)
             last = len(current)
+
+    _bind_alerts_page('show_add_rule_dialog', _show_add_rule_dialog_impl)
+    _bind_alerts_page('toggle_acked', _toggle_acked_impl)
 
     asyncio.create_task(check_new_alerts())
     refresh_alerts()
@@ -2218,38 +2233,6 @@ def session_detail_page():
                             with readout:
                                 _render_packets(readout, packets, nxt)
 
-                    def _paint_transport():
-                        """Rebuild only the transport row.
-
-                        Rebuilding the whole panel on every tick would tear down
-                        and rebuild the log 4x a second; at 10x that is 40 full
-                        re-renders a second, which locks the browser up.
-                        """
-                        transport.clear()
-                        with transport:
-                            play_btn = _btn(
-                                'Pause' if state['playing'] else 'Play',
-                                'us-btn-primary',
-                                _toggle_play)
-                            # With a dict of options, NiceGUI wants the KEY
-                            # as the value, not the mapped value. Passing 1.0
-                            # raises "Invalid value: 1.0" at construction.
-                            speed = ui.select(
-                                {'0.5×': 0.5, '1×': 1.0, '2×': 2.0,
-                                 '5×': 5.0, '20×': 20.0},
-                                value='1×', label='Speed',
-                            ).classes('w-28 us-input').props('outlined dense')
-                            speed.on_value_change(
-                                lambda e: state.update(
-                                    speed=(
-                                        {'0.5×': 0.5, '1×': 1.0, '2×': 2.0,
-                                         '5×': 5.0, '20×': 20.0}.get(e.value, 1.0)
-                                    if e.value else 1.0)))
-                            _btn('Restart', 'us-btn-ghost', _restart)
-                            ui.label(
-                                f"packet {state['index'] + 1} of {len(packets)}"
-                            ).classes('us-mono us-micro us-muted')
-
                     def _toggle_play():
                         if state['playing']:
                             state['playing'] = False
@@ -2270,6 +2253,37 @@ def session_detail_page():
 
                     progress.on_value_change(
                         lambda e: _seek(int(e.value or 0)))
+
+                    def _paint_transport():
+                        """Rebuild only the transport row.
+
+                        Rebuilding the whole panel on every tick would tear down
+                        and rebuild the log 4x a second; at 10x that is 40 full
+                        re-renders a second, which locks the browser up.
+                        """
+                        transport.clear()
+                        with transport:
+                            _btn(
+                                'Pause' if state['playing'] else 'Play',
+                                'us-btn-primary', _toggle_play)
+                            # With a dict of options, NiceGUI wants the KEY
+                            # as the value, not the mapped value. Passing 1.0
+                            # raises "Invalid value: 1.0" at construction.
+                            speed = ui.select(
+                                {'0.5×': 0.5, '1×': 1.0, '2×': 2.0,
+                                 '5×': 5.0, '20×': 20.0},
+                                value='1×', label='Speed',
+                            ).classes('w-28 us-input').props('outlined dense')
+                            speed.on_value_change(
+                                lambda e: state.update(
+                                    speed=(
+                                        {'0.5×': 0.5, '1×': 1.0, '2×': 2.0,
+                                         '5×': 5.0, '20×': 20.0}.get(e.value, 1.0)
+                                    if e.value else 1.0)))
+                            _btn('Restart', 'us-btn-ghost', _restart)
+                            ui.label(
+                                f"packet {state['index'] + 1} of {len(packets)}"
+                            ).classes('us-mono us-micro us-muted')
 
                     def _seek(index):
                         state['index'] = max(0, min(index, len(packets) - 1))
@@ -2846,108 +2860,326 @@ def marketplace_page():
 
 
 def decoder_page():
-    """Protocol decoder - hex input, decode, structured output, DBC file loading."""
-    dbc_info = {'loaded': False, 'messages': 0, 'signals': 0}
+    """Protocol decoder: raw bytes in, structured data out.
+
+    v1 was a hex text field, a protocol dropdown and a Decode button. Three
+    problems with that shape:
+
+      * It was a calculator. The product's whole reason to exist is a *live*
+        stream, and there was no way to decode what was arriving on a device
+        without copying bytes out of the Terminal and pasting them here.
+      * "No protocol detected" was a dead end. Auto-detect fails for plenty of
+        real input, and the screen offered nothing but an error.
+      * Every result rendered the same way -- a flat key/value list, with no
+        indication of which decoder produced it or how confident it was.
+
+    v2 adds a live mode that decodes the stream in place as it arrives, shows
+    the raw bytes beside the decoded fields so the two can be compared, and
+    treats a failed detection as a state to recover from rather than an error.
+    """
+    global selected_device
 
     _bind_decoder_page, _late_decoder_page = _late_bindings()
 
+    if selected_device is None:
+        needs_device(
+            'No device selected',
+            'Pick a device to decode its traffic, or paste bytes below to '
+            'decode a single frame.')
+        return
+
+    decoders = protocol_manager.list_decoders()
+    dbc = {'loaded': False, 'messages': 0, 'signals': 0}
+    live = {'on': False, 'decoded': 0, 'undecoded': 0, 'last': None}
+
     with ui.column().classes('w-full gap-4'):
-        # DBC file loader
-        with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(113,112,255,0.2)'):
-            with ui.row().classes('w-full items-center justify-between mb-2'):
-                ui.label('📁 CAN Database (.dbc)').classes('text-white font-medium')
-                ui.button('Load DBC File', on_click=_late_decoder_page('show_dbc_upload_dialog')).classes('bg-[#5c8af0] text-white px-3 py-1 text-sm rounded-lg')
-            with ui.row().classes('w-full items-center gap-3'):
-                ui.label('Status:').classes('text-[#71717a] text-xs')
-                dbc_status_label = ui.label('No DBC loaded').classes('text-[#52525b] text-xs font-mono')
-                ui.label('Messages:').classes('text-[#71717a] text-xs')
-                dbc_msgs_label = ui.label('0').classes('text-[#52525b] text-xs font-mono')
-                ui.label('Signals:').classes('text-[#71717a] text-xs')
-                dbc_sigs_label = ui.label('0').classes('text-[#52525b] text-xs font-mono')
 
-        with ui.row().classes('w-full items-center gap-3'):
+        # ── Live decode ───────────────────────────────────────────────────
+        with ui.column().classes('us-row w-full items-center gap-3 flex-wrap'):
+            ui.html(icon('decoder', 18, 'us-brand-mark'))
+            with ui.column().classes('flex-1 min-w-0 gap-0.5'):
+                ui.label('Decode the live stream').classes('us-subhead')
+                live_hint = ui.label(
+                    f'Every line from {selected_device.name or "this device"} '
+                    f'will be decoded as it arrives.').classes(
+                    'us-micro us-muted')
+            _btn('Start live decode', 'us-btn-primary',
+                 _late_decoder_page('toggle_live'))
+
+        live_status = ui.label('').classes('us-micro us-muted')
+
+        # ── Single frame ──────────────────────────────────────────────────
+        with ui.column().classes('us-row w-full items-end gap-3 flex-wrap'):
             protocol = ui.select(
-                ['auto'] + [p['id'] for p in protocol_manager.list_decoders()],
-                value='auto', label='Protocol'
-            ).classes('bg-[rgba(255,255,255,0.02)] text-[#e4e4e7] border border-[rgba(255,255,255,0.10)] px-3 py-2 rounded-lg w-48')
-            raw_input = ui.input('Hex Data', placeholder='e.g. 7848656C6C6F00 or 010300010001').classes('flex-1').props('outlined').style('color: #e4e4e7; font-family: JetBrains Mono, monospace')
-            ui.button('Decode', on_click=lambda: do_decode(raw_input.value, protocol.value)).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+                ['auto'] + [p['id'] for p in decoders],
+                value='auto', label='Protocol',
+            ).classes('w-52 us-input').props('outlined dense')
+            raw_input = ui.input(
+                'Hex', placeholder='010300010001840A').classes(
+                'flex-1 us-input us-mono').props('outlined dense')
+            _btn('Decode', 'us-btn-secondary',
+                 lambda: _decode_frame(raw_input.value, protocol.value))
 
-        result_container = ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto')
+        result = ui.column().classes('w-full gap-2')
 
-        def _show_dbc_upload_dialog_impl():
-            """Dialog to paste DBC file content."""
-            dialog = ui.dialog()
-            with dialog, ui.card().classes('p-6 w-[600px]').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
-                ui.label('Load CAN Database (.dbc)').classes('text-white font-medium mb-4 text-lg')
-                ui.label('Paste DBC file content below:').classes('text-[#71717a] text-xs mb-2')
-                dbc_input = ui.textarea('DBC Content', placeholder='BO_ 100 EngineData: 8 Vector__XXX\n SG_ RPM : 0|16@1+ (1,0) [0|8000] "rpm" Vector__XXX').classes('w-full h-48 mb-4').props('outlined').style('color: #e4e4e7; font-family: monospace; font-size: 11px')
-                with ui.row().classes('gap-2 justify-end w-full'):
-                    ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
-                    ui.button('Load', on_click=lambda: do_load_dbc(dbc_input.value, dialog)).classes('bg-[#5c8af0] text-white px-4 py-2 rounded-lg')
+        # ── CAN database ──────────────────────────────────────────────────
+        with ui.column().classes('w-full gap-2'):
+            with ui.row().classes('w-full items-center justify-between gap-3'):
+                with ui.column().classes('gap-0.5'):
+                    ui.label('CAN database').classes('us-label us-muted')
+                    dbc_status = ui.label('No DBC loaded').classes(
+                        'us-micro us-muted')
+                _btn('Load .dbc', 'us-btn-ghost',
+                     _late_decoder_page('show_dbc_upload_dialog'))
 
-        async def do_load_dbc(content, dialog):
-            if not content.strip():
-                ui.notify('Paste DBC content first', type='warning')
-                return
-            dialog.close()
-            ui.notify('Loading DBC file...', type='info')
-            try:
-                from app.core.protocol_decoder import protocol_manager
-                decoder = protocol_manager.get_decoder('can_dbc')
-                if decoder:
-                    result = decoder.load_dbc_text(content)
-                    msgs = result.get('messages', 0)
-                    sigs = result.get('total_signals', 0)
-                    if 'error' not in result:
-                        dbc_status_label.text = '✅ Loaded'
-                        dbc_msgs_label.text = str(msgs)
-                        dbc_sigs_label.text = str(sigs)
-                        ui.notify(f'DBC loaded: {msgs} messages, {sigs} signals', type='positive')
-                    else:
-                        ui.notify(f"Error: {result['error']}", type='negative')
-                else:
-                    ui.notify('DBC decoder not available', type='negative')
-            except Exception as e:
-                ui.notify(f'Error: {e}', type='negative')
+        # ── Implementations ───────────────────────────────────────────────
+        def _decoder_for(proto_id):
+            return protocol_manager.get_decoder(proto_id)
 
-        _bind_decoder_page('show_dbc_upload_dialog', _show_dbc_upload_dialog_impl)
+        def _paint_frame(decoded, proto_id, raw_hex, confidence=None):
+            """One decoded frame: raw bytes beside the fields they produced."""
+            result.clear()
+            with result:
+                decoder = _decoder_for(proto_id)
+                with ui.column().classes('us-row w-full gap-3 items-start'):
+                    with ui.column().classes('gap-1 w-56 shrink-0'):
+                        ui.label('raw').classes('us-micro us-muted')
+                        ui.label(raw_hex).classes('us-mono us-micro break-all')
+                    with ui.column().classes('gap-1 flex-1 min-w-0'):
+                        with ui.row().classes('items-center gap-2 flex-wrap'):
+                            if decoder is not None:
+                                ui.label(decoder.name).classes('us-unit')
+                            ui.label(proto_id).classes('us-mono us-micro us-muted')
+                            if confidence is not None:
+                                ui.label(
+                                    f'confidence {confidence:.0%}').classes(
+                                    'us-micro us-muted')
+                        for key, value in decoded.items():
+                            with ui.row().classes(
+                                    'items-baseline gap-3 flex-wrap'):
+                                ui.label(key).classes(
+                                    'us-micro us-muted w-40 shrink-0')
+                                ui.label(str(value)).classes(
+                                    'us-mono us-micro break-all')
 
-        async def do_decode(raw_hex, proto_id):
-            result_container.clear()
+        def _decode_frame(raw_hex, proto_id):
+            raw_hex = (raw_hex or '').replace(' ', '').replace(':', '')
             if not raw_hex:
+                ui.notify('Enter some hex bytes first', type='warning')
                 return
             try:
-                raw_data = bytes.fromhex(raw_hex.replace(' ', ''))
-            except ValueError:
-                ui.notify('Invalid hex', type='negative')
+                raw_data = bytes.fromhex(raw_hex)
+            except ValueError as e:
+                _decode_error(
+                    f'Not valid hex: {e}',
+                    'Hex must be an even number of hex digits, e.g. '
+                    '010300010001840A.')
+                return
+            if not raw_data:
+                _decode_error('No bytes to decode', 'The input was empty.')
                 return
 
+            confidence = None
             if proto_id == 'auto':
                 decoder = protocol_manager.auto_detect(raw_data)
-                if not decoder:
-                    with result_container:
-                        ui.label('No protocol detected').classes('text-[#ef4444]').style('padding: 20px')
+                if decoder is None:
+                    _no_protocol(raw_hex, raw_data)
                     return
                 proto_id = decoder.protocol_id
+                scores = []
+                for candidate in (protocol_manager.get_decoder(p)
+                                  for p in
+                                  [d['id'] for d in decoders]):
+                    if candidate is not None:
+                        try:
+                            scores.append(candidate.can_decode(raw_data))
+                        except Exception:
+                            pass
+                confidence = max(scores) if scores else None
 
-            decoded = protocol_manager.decode(proto_id, raw_data)
-            decoder = protocol_manager.get_decoder(proto_id)
+            try:
+                decoded = protocol_manager.decode(proto_id, raw_data)
+            except Exception as e:
+                _decode_error(f'{proto_id} failed to decode this frame: {e}',
+                              'Try a different protocol, or auto.')
+                return
+            _paint_frame(decoded, proto_id, raw_hex, confidence)
 
-            with result_container:
-                with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(113,112,255,0.2)'):
-                    with ui.row().classes('items-center gap-2 mb-3'):
-                        ui.label(decoder.name).classes('text-[#5c8af0] font-medium text-sm').style('background: rgba(113,112,255,0.15); padding: 2px 8px; border-radius: 9999px')
-                        ui.label(proto_id).classes('text-[#52525b] text-xs font-mono')
-                    with ui.column().classes('gap-1 font-mono text-sm'):
-                        for key, value in decoded.items():
-                            with ui.row().classes('gap-3'):
-                                ui.label(key).classes('text-[#71717a] min-w-32')
-                                ui.label(str(value)).classes('text-[#e4e4e7]')
+        def _no_protocol(raw_hex, raw_data):
+            """Auto-detect failed. Name the decoders and their scores.
 
+            v1 showed only "No protocol detected", which leaves the user with no
+            way to tell a wrong protocol from a malformed frame. Showing the
+            runner-up means the next action is obvious: pick it.
+            """
+            result.clear()
+            with result:
+                with ui.column().classes('us-row w-full gap-2'):
+                    ui.label('No protocol detected').classes('us-subhead')
+                    ui.label(
+                        f'{len(raw_data)} bytes did not match any decoder. '
+                        f'Pick the closest one below, or check the bytes.'
+                    ).classes('us-body us-muted')
+                scored = []
+                for entry in decoders:
+                    decoder = protocol_manager.get_decoder(entry['id'])
+                    if decoder is None:
+                        continue
+                    try:
+                        score = decoder.can_decode(raw_data)
+                    except Exception:
+                        score = 0.0
+                    scored.append((score, entry['id'], decoder.name))
+                scored.sort(reverse=True)
+                with ui.column().classes('w-full gap-1'):
+                    for score, pid, name in scored[:4]:
+                        with ui.row().classes(
+                                'us-row w-full items-center gap-3'):
+                            ui.label(name).classes('us-subhead')
+                            ui.label(f'{score:.0%}').classes(
+                                'us-mono us-micro us-muted')
+                            _btn('Use this', 'us-btn-ghost',
+                                 lambda p=pid, r=raw_hex: _decode_frame(r, p))
 
-# ─── Main Layout ─────────────────────────────────────────────────────────────
-content_container = None
+        def _decode_error(message, detail):
+            result.clear()
+            with result:
+                with ui.column().classes('us-row w-full gap-2'):
+                    ui.label(message).classes('us-subhead').style(
+                        f"color: {STATUS['error']}")
+                    ui.label(detail).classes('us-body us-muted')
+
+        # ── Live mode ─────────────────────────────────────────────────────
+        def _toggle_live_impl():
+            live['on'] = not live['on']
+            if live['on']:
+                _start_live()
+            else:
+                live_hint.text = (
+                    f'Every line from '
+                    f'{selected_device.name or "this device"} will be decoded '
+                    f'as it arrives.')
+                live_status.text = 'Stopped'
+                _late_decoder_page('stop_live')
+
+        def _start_live():
+            async def watch():
+                # _LINE_BUFFER is module level; terminal_state was a local
+                # of terminal_page() and raised NameError from here.
+                seen = 0
+                while live['on']:
+                    await asyncio.sleep(1.0)
+                    lines = _LINE_BUFFER['lines']
+                    new = lines[seen:]
+                    seen = len(lines)
+                    for entry in new:
+                        # lines are (timestamp, text, kind)
+                        _decode_live_line(
+                            entry[1] if len(entry) > 1 else str(entry))
+                live_status.text = 'Stopped'
+
+            asyncio.create_task(watch())
+            live_hint.text = 'Decoding incoming lines in place.'
+            live_status.text = 'Live'
+
+        def _decode_live_line(text):
+            """Decode one line, and be honest when it is not decodable.
+
+            Most serial traffic is plain text, which decodes trivially; the
+            value here is in the framing (raw vs structured) and in not
+            pretending an undecodable line was a protocol failure.
+            """
+            live['decoded'] += 1
+            hexed = text.encode('utf-8', errors='replace').hex().upper()
+            decoder = protocol_manager.auto_detect(text.encode(
+                'utf-8', errors='replace'))
+            if decoder is None:
+                live['undecoded'] += 1
+                live['last'] = text
+                _paint_live(text, hexed, None, decoded=False)
+            else:
+                try:
+                    decoded = protocol_manager.decode(
+                        decoder.protocol_id, text.encode('utf-8',
+                                                          errors='replace'))
+                except Exception:
+                    live['undecoded'] += 1
+                    _paint_live(text, hexed, None, decoded=False)
+                    return
+                live['last'] = text
+                _paint_live(text, hexed, decoder.protocol_id, decoded=True,
+                            fields=decoded)
+
+        def _paint_live(text, hexed, proto_id, decoded, fields=None):
+            result.clear()
+            with result:
+                with ui.column().classes('us-row w-full gap-3 items-start'):
+                    with ui.column().classes('gap-1 w-56 shrink-0'):
+                        ui.label('in').classes('us-micro us-muted')
+                        ui.label(text).classes('us-mono us-micro break-all')
+                        ui.label(hexed).classes('us-mono us-micro us-muted')
+                    with ui.column().classes('gap-1 flex-1 min-w-0'):
+                        if not decoded:
+                            ui.label('no protocol matched').classes(
+                                'us-micro us-muted')
+                            return
+                        decoder = _decoder_for(proto_id)
+                        if decoder is not None:
+                            ui.label(decoder.name).classes('us-unit')
+                        for key, value in (fields or {}).items():
+                            with ui.row().classes('items-baseline gap-3'):
+                                ui.label(key).classes('us-micro us-muted w-40')
+                                ui.label(str(value)).classes('us-mono us-micro')
+
+        # ── DBC ───────────────────────────────────────────────────────────
+        def _show_dbc_upload_dialog_impl():
+            dialog = ui.dialog()
+            with dialog, ui.column().classes('us-dialog w-[560px]'):
+                ui.label('Load a CAN database').classes('us-subhead')
+                ui.label(
+                    'Paste the contents of a .dbc file. Messages and signals '
+                    'are counted once it parses.'
+                ).classes('us-body us-muted')
+                dbc_input = ui.textarea(
+                    placeholder='BO_ 100 EngineData: 8 Vector__XXX\n'
+                                ' SG_ RPM : 0|16@1+ (1,0) [0|8000] "rpm"',
+                ).classes('w-full h-48 us-input us-mono').props('outlined')
+                with ui.row().classes('w-full justify-end gap-2'):
+                    _btn('Cancel', 'us-btn-ghost', dialog.close)
+                    _btn('Load', 'us-btn-primary',
+                         lambda: _load_dbc(dbc_input.value, dialog))
+            dialog.open()
+
+        async def _load_dbc(content, dialog):
+            if not (content or '').strip():
+                ui.notify('Paste the DBC content first', type='warning')
+                return
+            dialog.close()
+            decoder = protocol_manager.get_decoder('can_dbc')
+            if decoder is None:
+                ui.notify('The CAN DBC decoder is not available', type='negative')
+                return
+            try:
+                result = decoder.load_dbc_text(content)
+            except Exception as e:
+                ui.notify(f'Could not parse that DBC: {e}', type='negative')
+                dbc_status.text = 'Parse failed'
+                return
+            if 'error' in result:
+                dbc_status.text = 'Parse failed'
+                ui.notify(str(result['error'])[:160], type='negative')
+                return
+            dbc['loaded'] = True
+            dbc['messages'] = result.get('messages', 0)
+            dbc['signals'] = result.get('total_signals', 0)
+            dbc_status.text = (
+                f"{dbc['messages']} messages · {dbc['signals']} signals")
+            ui.notify(
+                f"DBC loaded: {dbc['messages']} messages, "
+                f"{dbc['signals']} signals", type='positive')
+
+        _bind_decoder_page('show_dbc_upload_dialog', _show_dbc_upload_dialog_impl)
+        _bind_decoder_page('toggle_live', _toggle_live_impl)
 
 def rebuild():
     """Rebuild the entire UI."""
