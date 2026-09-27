@@ -12,7 +12,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
 
 from nicegui import ui, app
 
-from uartscope_theme import inject_theme_css
+from uartscope_theme import (
+    inject_theme_css,
+    icon,
+    STATUS,
+)
 
 from app.core.device_manager import device_manager
 from app.core.telemetry_engine import telemetry_engine
@@ -52,7 +56,17 @@ def format_duration(started, ended=None, seconds=None):
     return f"{d//3600}h {(d%3600)//60}m"
 
 def severity_color(sev):
-    return {'critical': '#ef4444', 'warning': '#eab308', 'info': '#3b82f6'}.get(sev, '#71717a')
+    """Map an alert severity to a v2 status token.
+
+    v1 returned raw hex (#ef4444/#eab308/#3b82f6/#71717a) with no relationship to
+    the rest of the palette. The v2 values are computed for contrast on the dark
+    surfaces: error 5.59:1, warn 9.74:1, info 6.76:1, idle 5.04:1 on base.
+    """
+    return {
+        'critical': STATUS['error'],
+        'warning': STATUS['warn'],
+        'info': STATUS['info'],
+    }.get(sev, STATUS['idle'])
 
 def get_stats():
     return device_manager.get_stats()
@@ -70,46 +84,96 @@ def get_sessions():
     return session_recorder.list_sessions()
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
+# v2: labelled rail with inline SVG icons.
+#
+# v1 rendered nine bare unicode glyphs (◈▸◇⚡☁◉⟳⬡🛒) with no text label, no
+# tooltip and no accessible name — the labels existed in the nav tuple but were
+# never passed to the button. The drawer was also inline-pinned to 56px, so
+# labels would have clipped even if rendered.
+#
+# The rail collapses to icons below 1024px via CSS; because the label is real
+# text rather than a title attribute, the accessible name survives the collapse.
+
+NAV_ITEMS = [
+    ('devices', 'devices', 'Devices', True),
+    ('terminal', 'terminal', 'Terminal', True),
+    ('charts', 'charts', 'Charts', True),
+    ('performance', 'performance', 'Performance', False),
+    ('mqtt', 'mqtt', 'MQTT', False),
+    ('alerts', 'alerts', 'Alerts', True),
+    ('sessions', 'sessions', 'Sessions', True),
+    ('decoder', 'decoder', 'Decoder', True),
+    ('marketplace', 'marketplace', 'Marketplace', False),
+]
+
+# Screens still on the v1 treatment. Surfaced in the release notes as not-yet-v2
+# rather than hidden, so the nav is honest about what has been redesigned.
+V2_PENDING = {'performance', 'mqtt', 'marketplace'}
+
+
+def nav_label(tab_id):
+    for tid, _icon, label, _v2 in NAV_ITEMS:
+        if tid == tab_id:
+            return label
+    return tab_id.replace('-', ' ').title()
+
+
 def build_sidebar():
-    with ui.left_drawer(fixed=True).classes('bg-[#0d0f12] border-r border-[rgba(255,255,255,0.06)]').style('width: 56px'):
-        with ui.column().classes('px-2 py-4 gap-0.5'):
-            with ui.row().classes('items-center gap-2 mb-6'):
-                ui.label('◈').classes('text-[#5c8af0] text-xl')
-                ui.label('UART').classes('text-white font-semibold text-sm tracking-wide')
+    # Width: ui.left_drawer() has no width parameter, so it goes through props
+    # as Quasar's `width`. Quasar then offsets .q-page-container by that amount
+    # itself. Setting width via .style() or a CSS class instead made the aside
+    # 200px while the page container kept its own zero offset, so the rail
+    # rendered ON TOP of the header and the empty state.
+    drawer = ui.left_drawer(fixed=True)
+    drawer.props('width=200')
+    with drawer:
+        with ui.column().classes('w-full h-full'):
+            with ui.row().classes('items-center gap-3 px-4 py-5'):
+                ui.html(
+                    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" '
+                    'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
+                    'stroke-linejoin="round" aria-hidden="true" '
+                    'style="color:#c96442">'
+                    '<path d="M2.5 12h3l2-6 3 12 2.5-8 1.5 4h7"/>'
+                    '</svg>'
+                )
+                ui.label('UARTScope').classes('us-subhead')
 
-            nav_items = [
-                ('devices', '◈', 'Devices'),
-                ('terminal', '▸', 'Terminal'),
-                ('charts', '◇', 'Charts'),
-                ('performance', '⚡', 'Performance'),
-                ('mqtt', '☁', 'MQTT'),
-                ('alerts', '◉', 'Alerts'),
-                ('sessions', '⟳', 'Sessions'),
-                ('decoder', '⬡', 'Decoder'),
-                ('marketplace', '🛒', 'Marketplace'),
-            ]
+            ui.label('MONITOR').classes('us-label us-muted px-4 pb-2')
 
-            for tab_id, icon, label in nav_items:
+            nav_col = ui.column().classes('w-full px-2 gap-1')
+            for tab_id, icon_name, label, is_v2 in NAV_ITEMS:
                 is_active = current_tab == tab_id
-                bg = 'rgba(255,255,255,0.06)' if is_active else 'transparent'
-                text_color = '#f7f8f8' if is_active else '#71717a'
-                active_border = 'border-l-[3px] border-[#5c8af0]' if is_active else ''
-                ui.button(
-                    f'{icon}',
-                    on_click=lambda t=tab_id: switch_tab(t)
-                ).props(f'flat no-caps').classes(
-                    f'w-full justify-center px-0 py-2.5 rounded-lg text-center {active_border}'
-                ).style(f'background: {bg}; color: {text_color}')
+                with nav_col:
+                    btn = ui.button(on_click=lambda t=tab_id: switch_tab(t))
+                    btn.props('flat no-caps unelevated')
+                    btn.classes('us-rail-item')
+                    if not is_v2:
+                        btn.classes('opacity-60')
+                    if is_active:
+                        # aria-current marks the active item for assistive tech;
+                        # CSS adds the terracotta rail and a weight bump, so the
+                        # selected state never depends on colour alone.
+                        btn.props('aria-current=page')
+                    with btn:
+                        ui.html(icon(icon_name, 20))
+                        ui.label(label).classes('us-rail-label text-[13px]')
 
-        # Footer stats
-        stats = get_stats()
-        with ui.column().classes('mt-auto px-3 py-4 border-t border-[rgba(255,255,255,0.06)] gap-3'):
-            with ui.row().classes('justify-between'):
-                ui.label(f"{stats['connected']}/{stats['total']}").classes('text-white text-sm font-mono')
-                ui.label('DEV').classes('text-[#52525b] text-[10px] uppercase tracking-widest')
-            with ui.row().classes('justify-between'):
-                ui.label(format_bytes(stats['total_bytes_received'])).classes('text-white text-sm font-mono')
-                ui.label('DATA').classes('text-[#52525b] text-[10px] uppercase tracking-widest')
+            ui.space()
+            _build_rail_footer()
+
+
+def _build_rail_footer():
+    """Global counters, pinned to the bottom of the rail."""
+    stats = get_stats()
+    with ui.column().classes(
+            'w-full px-4 py-4 gap-2 border-t border-[rgba(176,174,165,0.16)]'):
+        with ui.row().classes('items-baseline justify-between w-full'):
+            ui.label(f"{stats['connected']}/{stats['total']}").classes('us-mono')
+            ui.label('Devices').classes('us-micro')
+        with ui.row().classes('items-baseline justify-between w-full'):
+            ui.label(format_bytes(stats['total_bytes_received'])).classes('us-mono')
+            ui.label('Received').classes('us-micro')
 
 
 # ─── Pages ───────────────────────────────────────────────────────────────────
@@ -1676,12 +1740,60 @@ def switch_tab(tab_id):
     rebuild()
 
 
+def build_header():
+    """Persistent page header: where you are, and what the system is doing.
+
+    v1 had no header at all. The only context anywhere was the sidebar brand and
+    an empty-state message, so there was no page name and no global status.
+    """
+    with ui.row().classes('us-header w-full items-center').style(
+            'margin: 0 -24px; padding-left: 24px; padding-right: 24px'):
+        with ui.column().classes('gap-1'):
+            ui.label(nav_label(current_tab)).classes('us-title')
+            ui.label(_TAB_SUBTITLES.get(current_tab, '')).classes('us-caption us-muted')
+        with ui.row().classes('items-center gap-3'):
+            _header_status()
+            if current_tab in V2_PENDING:
+                ui.label('Not yet v2').classes(
+                    'us-micro px-2 py-1 rounded-full').style(
+                    'background:rgba(176,174,165,0.10)')
+
+def _header_status():
+    """Live connection state. Colour is backed by a text label, never alone."""
+    stats = get_stats()
+    live = stats.get('connected', 0) > 0
+    with ui.row().classes('us-status items-center gap-2'):
+        ui.html(f'<span class="us-dot {"us-dot-live" if live else "us-dot-idle"}">')
+        ui.label(
+            f"{stats.get('connected', 0)} of {stats.get('total', 0)} devices"
+            if live else "No devices"
+        ).classes('us-caption')
+
+
+# One line of orientation per screen. Monitor surfaces, not marketing copy.
+_TAB_SUBTITLES = {
+    'devices': 'Serial ports and connection state',
+    'terminal': 'Live stream',
+    'charts': 'Real-time telemetry',
+    'alerts': 'Rule-based monitoring',
+    'sessions': 'Recording and replay',
+    'session-detail': 'Session detail',
+    'decoder': 'I2C, SPI, CAN, Modbus decode',
+    'performance': 'Packet rate, throughput, latency',
+    'mqtt': 'Broker connections and pub/sub',
+    'marketplace': 'Community protocol decoders',
+}
+
+
 @ui.page('/')
 def main_page():
     global content_container
 
     # v2 design system: tokens + Inter/JetBrains Mono. Must run before any
     # screen is built so the first paint is already themed.
+    # The Quasar palette re-point inside inject_theme_css() is authoritative;
+    # setting primary here would reintroduce the blue that --q-primary now
+    # deliberately holds neutral ink instead.
     inject_theme_css(ui)
 
     # Background data refresh
@@ -1700,18 +1812,25 @@ def main_page():
     # Build layout
     build_sidebar()
 
-    # Content area
-    content_container = ui.column().classes('p-6 w-full').style('max-width: 1000px; margin: 0 auto')
-    render_content()
+    # Content area. v1 capped this at max-width 1000px, which left Monitor
+    # surfaces (terminal, charts) stranded on a narrow column in the middle of a
+    # wide monitor. The cap is raised to 1600px: dense screens can breathe, and
+    # text screens stay readable. Padding is restored here because the header and
+    # page need the inset that v1 got from the container's own p-6.
+    content_container = ui.column().classes('w-full').style(
+        'max-width: 1600px; margin: 0 auto; padding: 0 24px 32px 24px')
+    with content_container:
+        build_header()
+        render_content()
 
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
+        # v1 shipped title '🐴 UARTScope Pro' and an emoji favicon.
         title='UARTScope Pro',
         port=3000,
         host='0.0.0.0',
         dark=True,
         reload=False,
         show=False,
-        favicon='🎯',
     )

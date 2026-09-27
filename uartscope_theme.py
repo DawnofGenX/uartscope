@@ -395,15 +395,17 @@ body, .q-body {{
 }}
 
 /* ── Navigation ──────────────────────────────────────────────────────────── */
+/* Width is set with min/max as well as width: Quasar's drawer carries its own
+   min-width, which otherwise wins and renders a 300px rail. */
 .us-rail {{ background:{s['panel']}; border-right:1px solid {s['line']};
-            width:{RAIL_WIDTH}; }}
+            width:{RAIL_WIDTH}; min-width:{RAIL_WIDTH}; max-width:{RAIL_WIDTH}; }}
 .us-rail-item {{
   display:flex; align-items:center; gap:{sp['3']};
   width:100%; padding:10px 12px; border-radius:{r['md']};
   color:{x['secondary']}; font-size:14px; font-weight:{weight['regular']};
   letter-spacing:{tracking['snug']};
   border:none; background:transparent; cursor:pointer; text-align:left;
-  position:relative; min-height:40px;
+  position:relative; min-height:44px;
   transition:background {mo['fast']}, color {mo['fast']};
 }}
 .us-rail-item:hover {{ background:rgba(176,174,165,0.08); color:{x['primary']}; }}
@@ -499,6 +501,12 @@ def inject_theme_css(ui) -> None:
     system-ui fallback, so the app still renders correctly offline.
     """
     ui.add_css(build_css())
+    # Quasar drives its own palette from these custom properties. Without
+    # overriding them, q-btn/q-drawer keep painting Quasar's default blue
+    # (#5898d4) and the v1 cornflower blue leaks back in over the top of the
+    # token layer -- .q-btn sets color: var(--q-primary), which outranks a
+    # plain .us-rail-item rule.
+    ui.add_css(build_quasar_overrides())
     ui.add_head_html(
         '<link rel="preconnect" href="https://fonts.googleapis.com">'
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
@@ -506,6 +514,87 @@ def inject_theme_css(ui) -> None:
         '?family=Inter:wght@400;500;600;700'
         '&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">'
     )
+
+
+def build_quasar_overrides() -> str:
+    """Re-point Quasar's palette and layout vars at the v2 tokens.
+
+    Quasar components read these rather than the theme's own classes, so this is
+    what makes the whole widget library inherit the warm palette instead of
+    being fought with selector-by-selector.
+    """
+    return f"""
+/* ── Quasar palette re-point ───────────────────────────────────────────────
+   NiceGUI wraps all of Quasar in cascade layers, declared in this order:
+     theme, base, quasar, nicegui, components, utilities, overrides,
+     quasar_importants
+   Quasar sets the palette defaults (--q-primary: #1976D2 and the blue
+   #5898d4 NiceGUI derives from it) inside layer(quasar). Unlayered styles
+   would normally beat a layered one, but injected <style> blocks are appended
+   to <head> and their layer position is not guaranteed -- putting our values
+   in the `overrides` layer makes precedence explicit and intentional.
+   `overrides` is the last slot before quasar_importants, so this wins over
+   Quasar's defaults but still yields to Quasar's own !important utilities. */
+@layer overrides {{
+/* NiceGUI writes the Quasar palette as an INLINE style attribute on <body>:
+     --q-primary: #5898d4; --q-secondary: #26a69a; --q-dark: #1d1d1d; ...
+   An inline declaration beats any :root rule, which is why the nav labels kept
+   rendering Quasar blue no matter what the stylesheet said. The only override
+   that outranks an inline style is !important -- so target <body> directly.
+   Verified via getComputedStyle on the live app. */
+body {{
+  --q-primary: {TEXT['secondary']} !important;
+  --q-secondary: {TEXT['primary']} !important;
+  --q-accent: {ACCENT['text']} !important;
+  --q-dark: {SURFACE['base']} !important;
+  --q-dark-page: {SURFACE['base']} !important;
+  --q-positive: {STATUS['live']} !important;
+  --q-negative: {STATUS['error']} !important;
+  --q-warning: {STATUS['warn']} !important;
+  --q-info: {STATUS['info']} !important;
+}}
+
+:root {{
+  /* Same values for elements outside <body> (popovers portalled to <html>). */
+  --q-primary: {TEXT['secondary']};
+  --q-secondary: {TEXT['primary']};
+  --q-accent: {ACCENT['text']};
+  --q-dark: {SURFACE['base']};
+  --q-dark-page: {SURFACE['base']};
+  --q-positive: {STATUS['live']};
+  --q-negative: {STATUS['error']};
+  --q-warning: {STATUS['warn']};
+  --q-info: {STATUS['info']};
+}}
+
+/* q-btn and the Quasar text-* utilities both resolve through --q-primary, which
+   is now neutral ink (see :root above). These are belt-and-braces for
+   components that hardcode a colour instead of reading a variable. */
+.q-btn {{ color:{TEXT['secondary']}; }}
+.q-btn:hover {{ color:{TEXT['primary']}; }}
+.q-btn.bg-primary {{ color:{TEXT['inverse']}; }}
+.bg-primary {{ background:{ACCENT['base']} !important; color:{TEXT['inverse']} !important; }}
+
+/* NiceGUI's ui.button() renders as .q-btn.q-btn-item, not .q-btn alone, so a
+   plain .q-btn rule never matched the nav. Target the item variant directly. */
+.q-btn-item, .q-btn.q-btn-item {{ color:{TEXT['secondary']}; }}
+.us-rail-item.q-btn-item {{ color:{TEXT['secondary']}; }}
+.us-rail-item.q-btn-item:hover {{ color:{TEXT['primary']}; }}
+.us-rail-item.q-btn-item[aria-current="page"] {{ color:{TEXT['primary']}; }}
+/* The active item's icon takes the accent; the label stays neutral ink so the
+   text itself is never a low-contrast accent colour. */
+.us-rail-item.q-btn-item[aria-current="page"] svg {{ color:{ACCENT['text']}; }}
+
+/* The drawer width is set through Quasar's own `width` prop in
+   build_sidebar(), NOT here. Forcing width from CSS made the aside 200px while
+   .q-page-container kept Quasar's own (zero) offset, so the rail rendered on
+   top of the header. Quasar must own the width so it can offset the page. */
+.q-drawer .q-drawer__content {{ background:{SURFACE['panel']}; }}
+
+/* NiceGUI's generic colour utilities resolve to Quasar's palette. */
+.nicegui-icon {{ color:currentColor; }}
+}}  /* end @layer overrides */
+"""
 
 
 # ─── Self-audit ─────────────────────────────────────────────────────────────
