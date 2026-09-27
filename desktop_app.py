@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import types
 import uuid
 from datetime import datetime
 
@@ -12,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
 
 from nicegui import ui, app
 
+from uartscope_follow import follow_hook_js, scroll_to_bottom_js
 from uartscope_theme import (
     inject_theme_css,
     icon,
@@ -106,6 +108,8 @@ NAV_ITEMS = [
     ('decoder', 'decoder', 'Decoder', True),
     ('marketplace', 'marketplace', 'Marketplace', False),
 ]
+
+NAV_TAB_IDS = {tid for tid, *_ in NAV_ITEMS}
 
 # Screens still on the v1 treatment. Surfaced in the release notes as not-yet-v2
 # rather than hidden, so the nav is honest about what has been redesigned.
@@ -504,6 +508,60 @@ def _devices_empty_state(scan_state, refresh):
                     ui.label(step).classes('flex-1')
 
 
+def _late_bindings():
+    """A registry for handlers referenced before they are defined.
+
+    v1 wired `on_click=some_handler` to functions defined further down the same
+    page-builder body. Python allows it; the *page* does not survive it -- the
+    name is a local that is not yet bound, so constructing the screen raises
+    UnboundLocalError and the screen is simply unreachable. Terminal, Charts,
+    Decoder, Alerts, Session Detail and MQTT were all broken this way in v1.
+
+    Rather than re-indent six large page builders to hoist each handler above
+    the UI, the button binds to `_late('name')`, which resolves the handler when
+    the click fires -- by which point the real function is always in scope. The
+    page then registers it: `_bind('name', real_handler)`.
+
+    check_handler_order.py statically verifies the pattern is actually used and
+    that no page is left with an unresolved reference.
+    """
+    registry: dict = {}
+
+    def bind(name, fn):
+        registry[name] = fn
+
+    def late(name):
+        def call(*a, **kw):
+            fn = registry.get(name)
+            if fn is None:
+                raise RuntimeError(f'handler {name!r} was never registered')
+            return fn(*a, **kw)
+        return call
+
+    return bind, late
+
+
+def needs_device(title, detail):
+    """Render a dead-end guard for screens that require a selected device.
+
+    v1 used a bare centred label on Terminal, Charts and Sessions: "Select a
+    device from the Devices tab". It names the problem but gives the user no way
+    out of it, from a screen that has no route back. v2 states what is needed
+    and offers the one action that resolves it.
+    """
+    with ui.column().classes('us-empty w-full'):
+        with ui.column().classes('gap-2'):
+            ui.label(title).classes('us-display')
+            ui.label(detail).classes('us-body')
+        _btn('Go to Devices', 'us-btn-primary', _goto_devices)
+
+
+def _goto_devices():
+    global current_tab
+    current_tab = 'devices'
+    rebuild()
+
+
 def _is_real(value):
     """True when a backend-detected string is actual information.
 
@@ -579,44 +637,47 @@ async def _add_detected(port, refresh):
 
 
 def terminal_page():
-    """Terminal view - real-time serial output with search & filter."""
+    """Terminal: the Command/Inspect surface.
+
+    v1 could not be opened at all. It built the command bar -- passing
+    `on_click=show_macros_dialog` -- some 70 lines *before* defining that
+    handler, so page construction raised UnboundLocalError and the screen died
+    with a 500. The error only ever appeared in the server log. Handlers are
+    therefore defined before the UI here, and the order is not incidental.
+
+    The other thing v1 got wrong is the one users feel most: it re-rendered the
+    log and let the browser stick to the bottom, so scrolling up to read a burst
+    of output was impossible -- the view yanked you back down mid-sentence.
+    v2 follows Wireshark's model: follow the tail only while the user is already
+    at the bottom, otherwise hold position and count the backlog.
+    """
     global selected_device
 
     if not selected_device:
-        ui.label('Select a device from the Devices tab to open the terminal').classes('text-[#52525b] text-sm').style('padding: 60px')
+        needs_device(
+            'No device selected',
+            'Pick a device to watch its serial output live. Start one on the '
+            'Devices screen if you have not already.')
         return
 
-    # State for terminal
-    terminal_state = {'lines': [], 'search': '', 'case_sensitive': False, 'regex': False, 'match_count': 0, 'current_match': 0, 'filter_level': 'all', 'filter_metric': ''}
+    # ── State ────────────────────────────────────────────────────────────
+    terminal_state = {
+        'lines': [], 'search': '', 'case_sensitive': False, 'regex': False,
+        'match_count': 0, 'current_match': 0, 'filter_level': 'all',
+        'filter_metric': '', 'follow': True, 'pending': 0, 'rendered': 0,
+    }
+    command_history = []   # [{'cmd': str, 'timestamp': str}]
+    macros = [{'name': 'Scan I2C', 'commands': ['AA', 'BB']}]
 
-    with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
-        # Header
-        with ui.row().classes('w-full items-center justify-between mb-3'):
-            ui.label(f"{selected_device.name}  /  {selected_device.port}").classes('text-[#71717a] text-sm font-mono')
-            ui.label('0 lines').classes('text-[#52525b] text-xs font-mono').bind_text_from(terminal_state, 'lines', lambda v: f"{len(v)} lines")
-
-        # Command bar
-        with ui.row().classes('w-full gap-2 items-center p-3').style('background: #16181d; border-radius: 8px'):
-            cmd_input = ui.input('Send command', placeholder='Type a command and press Enter...').classes('flex-1').props('outlined dense').style('color: #e4e4e7; font-family: JetBrains Mono, monospace; font-size: 12px')
-            ui.button('Send', on_click=lambda: send_command()).classes('bg-[#22c55e] text-white px-4 py-1.5 text-sm rounded-lg font-medium')
-            ui.button('Macros ▾', on_click=show_macros_dialog).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
-            ui.button('History ▾', on_click=show_history_dialog).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
-
-        # Command state
-        command_history = []  # list of {'cmd': str, 'timestamp': str}
-        macros = [{'name': 'Scan I2C', 'commands': ['AA', 'BB']}]  # example macros
-
+    # ── Handlers (all defined before the UI references them) ─────────────
     def send_command():
-        """Send command to device."""
-        cmd = cmd_input.value
+        cmd = (cmd_input.value or '').strip()
         if not cmd:
             return
-        # Record in history
-        ts = datetime.utcnow().strftime('%H:%M:%S')
-        command_history.insert(0, {'cmd': cmd, 'timestamp': ts})
-        if len(command_history) > 100:
-            command_history.pop()
-        # Send to device
+        command_history.insert(
+            0, {'cmd': cmd, 'timestamp': datetime.utcnow().strftime('%H:%M:%S')})
+        del command_history[100:]
+
         async def _send():
             device = device_manager.get_device(selected_device.id)
             if device and device.serial_conn:
@@ -630,72 +691,28 @@ def terminal_page():
         asyncio.create_task(_send())
         cmd_input.value = ''
 
-    def show_history_dialog():
-        """Show command history dialog."""
-        dialog = ui.dialog()
-        with dialog, ui.card().classes('p-4 w-96 max-h-80 overflow-y-auto').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
-            ui.label('Command History').classes('text-white font-semibold mb-4')
-            if not command_history:
-                ui.label('No commands in history').classes('text-[#52525b] text-sm py-6')
-            else:
-                with ui.column().classes('w-full gap-0.5'):
-                    for entry in command_history[:20]:
-                        with ui.row().classes('w-full items-center gap-3 px-3 py-2 rounded-lg hover:bg-[rgba(255,255,255,0.03)]') \
-                            .on('click', lambda e=entry: replay_command(e)):
-                            ui.label(entry['timestamp']).classes('text-[#52525b] text-xs font-mono w-16')
-                            ui.label(entry['cmd']).classes('text-[#e4e4e7] text-sm font-mono flex-1')
-                            ui.label('↗').classes('text-[#5c8af0] text-xs')
+    def replay_command(entry):
+        cmd_input.value = entry['cmd']
 
-    def show_macros_dialog():
-        """Show macros management dialog."""
-        dialog = ui.dialog()
-        with dialog, ui.card().classes('p-4 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
-            with ui.row().classes('w-full items-center justify-between mb-3'):
-                ui.label('Macros').classes('text-white font-medium')
-                ui.button('+ New', on_click=lambda: show_create_macro_dialog()).classes('bg-[#5c6fd0] text-white px-3 py-1 text-xs rounded-lg font-medium')
-
-            if not macros:
-                ui.label('No macros defined yet').classes('text-[#52525b] text-sm py-6')
-            else:
-                with ui.column().classes('w-full gap-0.5'):
-                    for i, macro in enumerate(macros):
-                        with ui.row().classes('w-full items-center gap-3 px-3 py-2 rounded-lg').style('background: rgba(255,255,255,0.02)'):
-                            ui.label(macro['name']).classes('text-[#e4e4e7] text-sm font-medium flex-1')
-                            cmd_count = len(macro['commands'])
-                            ui.label(f"{cmd_count} commands").classes('text-[#52525b] text-xs')
-                            ui.button('▶ Run', on_click=lambda m=macro: run_macro(m)).classes('bg-[#22c55e] text-white px-2 py-0.5 text-xs rounded')
-                            ui.button('x', on_click=lambda idx=i: delete_macro(idx)).classes('text-[#ef4444] text-xs px-2 py-1 rounded hover:bg-[rgba(239,68,68,0.1)]')
-
-    def show_create_macro_dialog():
-        """Dialog to create a new macro."""
-        macro_dialog = ui.dialog()
-        with macro_dialog, ui.card().classes('p-4 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
-            ui.label('New Macro').classes('text-white font-medium mb-3')
-            name_input = ui.input('Name', value='My Macro').classes('w-full mb-2').props('outlined').style('color: #e4e4e7')
-            cmds_input = ui.textarea('Commands (one per line)', value='AT\r\nAT+STATUS').classes('w-full mb-3').props('outlined').style('color: #e4e4e7; font-family: monospace')
-            with ui.row().classes('gap-2 justify-end w-full'):
-                ui.button('Cancel', on_click=macro_dialog.close).props('flat').classes('text-[#71717a]')
-                ui.button('Create', on_click=lambda: create_macro(name_input.value, cmds_input.value, macro_dialog)).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+    def delete_macro(index):
+        if 0 <= index < len(macros):
+            name = macros[index]['name']
+            macros.pop(index)
+            ui.notify(f"Deleted macro '{name}'", type='info')
+            _rerender_macros()
 
     def create_macro(name, commands_text, dialog):
-        """Create a new macro."""
         commands = [c.strip() for c in commands_text.strip().split('\n') if c.strip()]
         if not commands:
             ui.notify('Add at least one command', type='warning')
             return
         macros.append({'name': name or 'Unnamed', 'commands': commands})
         dialog.close()
-        ui.notify(f"Macro '{name}' created with {len(commands)} commands", type='positive')
-
-    def delete_macro(index):
-        """Delete a macro."""
-        if 0 <= index < len(macros):
-            name = macros[index]['name']
-            macros.pop(index)
-            ui.notify(f"Deleted macro '{name}'", type='info')
+        ui.notify(f"Macro '{name}' created with {len(commands)} commands",
+                  type='positive')
+        _rerender_macros()
 
     async def run_macro(macro):
-        """Execute a macro sequence."""
         device = device_manager.get_device(selected_device.id)
         if not device or not device.serial_conn:
             ui.notify("Device not connected", type='warning')
@@ -710,141 +727,290 @@ def terminal_page():
                 return
         ui.notify(f"Macro '{macro['name']}' complete", type='positive')
 
-    def replay_command(entry):
-        """Replay a command from history."""
-        cmd_input.value = entry['cmd']
+    # ── Follow-mode ──────────────────────────────────────────────────────
+    # The tail test must run in JS: NiceGUI elements expose no scrollTop /
+    # scrollHeight / clientHeight, so Python cannot answer "is the user parked at
+    # the newest line?" at all. uartscope_follow owns the listener and reports
+    # only the boolean that actually changed.
+    def _scroll_to_bottom():
+        ui.run_javascript(scroll_to_bottom_js())
 
-    # Wire up Enter key on command input
-    cmd_input.on('keydown.enter', lambda: send_command())
+    def _update_jump_bar():
+        n = terminal_state['pending']
+        if n:
+            jump_bar.text = f"↓ {n:,} new line{'' if n == 1 else 's'}"
+            jump_bar.tooltip = "Jump to the newest line and resume following"
+        else:
+            jump_bar.text = "↓ Following"
+            jump_bar.tooltip = "Following the newest line"
 
-    # Search & Filter bar
-    with ui.row().classes('w-full gap-2 items-center p-3').style('background: #16181d; border-radius: 8px'):
-            search_input = ui.input('Search (Ctrl+F)', placeholder='Type to search...').classes('flex-1').props('outlined dense').style('color: #e4e4e7; font-family: JetBrains Mono, monospace; font-size: 12px')
-            search_input.bind_value(terminal_state, 'search')
-            case_toggle = ui.checkbox('Case sensitive').classes('text-[#71717a] text-xs').bind_value(terminal_state, 'case_sensitive')
-            regex_toggle = ui.checkbox('Regex').classes('text-[#71717a] text-xs').bind_value(terminal_state, 'regex')
-            level_select = ui.select(['all', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'metric', 'json'], value='all', label='Filter').classes('w-24').props('outlined dense').bind_value(terminal_state, 'filter_level')
-            metric_input = ui.input('Metric', placeholder='e.g. TEMP').classes('w-28').props('outlined dense').bind_value(terminal_state, 'filter_metric')
+    def _jump_to_new():
+        """Resume following: clear the backlog, re-render, park at the tail."""
+        terminal_state['pending'] = 0
+        terminal_state['follow'] = True
+        _apply_search_filter()
+        _update_jump_bar()
 
-    # Match navigation bar
-    with ui.row().classes('w-full gap-2 items-center p-3').style('background: #16181d; border-radius: 8px'):
-        match_label = ui.label('No matches').classes('text-[#52525b] text-xs flex-1')
-        ui.button('◀', on_click=lambda: navigate_match(-1)).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-2 py-0.5 text-xs rounded')
-        ui.button('▶', on_click=lambda: navigate_match(1)).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-2 py-0.5 text-xs rounded')
-        ui.button('Clear', on_click=lambda: clear_search()).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-2 py-0.5 text-xs rounded')
+    def _on_follow_change(e):
+        """JS reports that the user scrolled away from, or back to, the tail."""
+        following = e.args[0] if getattr(e, 'args', None) else True
+        terminal_state['follow'] = bool(following)
+        if following:
+            terminal_state['pending'] = 0
+        _update_jump_bar()
 
-    # Log area
-    log_area = ui.column().classes('w-full gap-0 overflow-y-auto') \
-        .style('max-height: 55vh; background: #0d0f12; padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); font-family: JetBrains Mono, monospace; font-size: 13px; width: 100%')
+    # ── Rendering ────────────────────────────────────────────────────────
+    def _classify(line):
+        """Tag a line so it can be filtered and coloured by kind."""
+        up = line.upper()
+        if any(w in up for w in ('ERROR', 'FATAL')):
+            return 'error'
+        if any(w in up for w in ('WARN', 'WARNING')):
+            return 'warn'
+        if line.startswith('{') and line.endswith('}'):
+            return 'json'
+        if any(up.startswith(m) for m in (
+                'TEMP', 'VOLTAGE', 'HUMIDITY', 'PRESSURE', 'CURRENT', 'POWER',
+                'ADC', 'PWM', 'FREQ', 'RSSI', 'SNR')):
+            return 'metric'
+        return 'log'
+
+    def _matcher(search, case_sensitive, use_regex):
+        if not search:
+            return None
+        import re as _re
+        flags = 0 if case_sensitive else _re.IGNORECASE
+        try:
+            return _re.compile(search if use_regex else _re.escape(search), flags)
+        except _re.error:
+            # A half-typed regex should not blank the log; it should say it is
+            # invalid and otherwise leave the view alone.
+            return 'invalid'
+
+    def _passes_level(line, line_type, level):
+        if level == 'all':
+            return True
+        up = line.upper()
+        if level in ('ERROR', 'WARN', 'INFO', 'DEBUG'):
+            return level in up
+        return line_type == level
 
     def _apply_search_filter():
-        """Apply search and filter to all stored lines, re-render log area."""
+        """Re-render the log under the current search, filter and follow state."""
         search = terminal_state['search']
-        case_sensitive = terminal_state['case_sensitive']
-        use_regex = terminal_state['regex']
+        pattern = _matcher(search, terminal_state['case_sensitive'],
+                           terminal_state['regex'])
         level = terminal_state['filter_level']
         metric_filter = terminal_state['filter_metric'].strip().upper()
 
-        import re as _re
         matches = []
-
-        # Compile regex if needed
-        pattern = None
-        if search:
-            flags = 0 if case_sensitive else _re.IGNORECASE
-            if use_regex:
-                try:
-                    pattern = _re.compile(search, flags)
-                except _re.error:
-                    pattern = None
-            else:
-                pattern = _re.compile(_re.escape(search), flags)
-
-        for i, (timestamp, line, line_type) in enumerate(terminal_state['lines']):
-            # Level filter
-            if level != 'all':
-                if level == 'ERROR' and 'ERROR' not in line.upper():
-                    continue
-                elif level == 'WARN' and not any(w in line.upper() for w in ['WARN', 'WARNING']):
-                    continue
-                elif level == 'INFO' and 'INFO' not in line.upper():
-                    continue
-                elif level == 'DEBUG' and 'DEBUG' not in line.upper():
-                    continue
-                elif level == 'metric' and line_type != 'metric':
-                    continue
-                elif level == 'json' and line_type != 'json':
-                    continue
-
-            # Metric filter
+        for i, (ts, line, line_type) in enumerate(terminal_state['lines']):
+            if not _passes_level(line, line_type, level):
+                continue
             if metric_filter and metric_filter not in line.upper():
                 continue
-
-            # Search filter
             is_match = True
-            if pattern:
-                check_line = line if case_sensitive else line.lower()
-                is_match = bool(pattern.search(check_line))
+            if pattern == 'invalid':
+                is_match = False
+            elif pattern is not None:
+                is_match = bool(pattern.search(
+                    line if terminal_state['case_sensitive'] else line.lower()))
+            matches.append((i, ts, line, line_type, is_match))
 
-            matches.append((i, timestamp, line, line_type, is_match))
-
-        # Render filtered results
-        log_area.clear()
-        match_indices = [idx for idx, (_, _, _, _, m) in enumerate(matches) if m and search]
+        match_indices = [k for k, m in enumerate(matches) if m and search]
         terminal_state['match_count'] = len(match_indices)
 
-        if not match_label:
-            pass
-        if match_indices:
-            match_label.text = f"Match {terminal_state['current_match'] + 1} of {len(match_indices)}"
+        if pattern == 'invalid':
+            match_label.set_text("Invalid regular expression")
+        elif match_indices:
+            terminal_state['current_match'] = min(
+                terminal_state['current_match'], len(match_indices) - 1)
+            match_label.set_text(
+                f"Match {terminal_state['current_match'] + 1} of "
+                f"{len(match_indices):,}")
         elif search:
-            match_label.text = "No matches"
+            match_label.set_text("No matches")
         else:
-            match_label.text = f"{len(terminal_state['lines'])} lines"
+            match_label.set_text(f"{len(terminal_state['lines']):,} lines")
+
+        # Cap what we paint. The buffer holds 5000 lines; creating one NiceGUI
+        # element per line on every batch is what made v1 stutter, and nobody
+        # reads 5000 rows on screen at once. The cap still leaves far more
+        # scrollback than fits on a monitor.
+        MAX_PAINTED = 600
+        visible = matches[-MAX_PAINTED:]
+        hidden = len(matches) - len(visible)
 
         with log_area:
-            for idx, (orig_i, ts, line, line_type, is_match) in enumerate(matches):
-                # Color based on line type
-                if line_type == 'error':
-                    color = '#ef4444'
-                elif line_type == 'warn':
-                    color = '#eab308'
-                elif line_type == 'metric':
-                    color = '#5c8af0'
-                elif line_type == 'json':
-                    color = '#22c55e'
-                else:
-                    color = '#e4e4e7'
+            if hidden:
+                ui.label(
+                    f"… {hidden:,} earlier line{'' if hidden == 1 else 's'} "
+                    f"matched but not shown — narrow the filter to see them"
+                ).classes('us-log-more')
+            for _i, ts, line, line_type, is_match in visible:
+                ui.label(f"[{ts}] {line}").classes(
+                    f'us-log-line us-log-{line_type}').style(
+                    'background: rgba(201,100,66,0.18); border-radius:2px;'
+                    if is_match and search else '')
 
-                # Highlight search matches
-                bg_style = 'background: rgba(113,112,255,0.2); border-radius: 2px;' if is_match and search else ''
-                ui.label(f"[{ts}] {line}").classes(f'leading-relaxed font-mono').style(f'color: {color}; {bg_style}')
+        # Follow-mode: only move the viewport if the user was already at the
+        # tail. Otherwise preserve where they scrolled to and count the backlog.
+        if terminal_state['follow']:
+            _scroll_to_bottom()
+        else:
+            added = len(matches) - terminal_state['rendered']
+            if added > 0:
+                terminal_state['pending'] += added
+                _update_jump_bar()
+        terminal_state['rendered'] = len(matches)
 
     def navigate_match(direction):
-        """Navigate to next/prev match."""
         if direction == '__init__':
             return
-        # Re-run search to get match count
-        _apply_search_filter()
         if terminal_state['match_count'] == 0:
             return
-        terminal_state['current_match'] = (terminal_state['current_match'] + direction) % terminal_state['match_count']
+        terminal_state['current_match'] = (
+            terminal_state['current_match'] + direction) % terminal_state['match_count']
         _apply_search_filter()
 
     def clear_search():
-        """Clear search and reset filters."""
         terminal_state['search'] = ''
         terminal_state['filter_level'] = 'all'
         terminal_state['filter_metric'] = ''
         terminal_state['current_match'] = 0
         _apply_search_filter()
 
-    # Wire up reactive search
+    def toggle_case():
+        terminal_state['case_sensitive'] = not terminal_state['case_sensitive']
+        _apply_search_filter()
+
+    def toggle_regex():
+        terminal_state['regex'] = not terminal_state['regex']
+        _apply_search_filter()
+
+    # ── Dialogs ──────────────────────────────────────────────────────────
+    # Held on the state dict rather than closed over, so _rerender_macros() can
+    # reach it without a nonlocal and without UnboundLocalError.
+    terminal_state['macros_host'] = None
+
+    def _rerender_macros():
+        host = terminal_state.get('macros_host')
+        if host is None or host.is_deleted:
+            return
+        host.clear()
+        with host:
+            _render_macros()
+
+    def _render_macros():
+        if not macros:
+            ui.label('No macros yet').classes('us-body us-muted')
+            return
+        with ui.column().classes('w-full gap-1'):
+            for i, macro in enumerate(macros):
+                with ui.row().classes('us-row w-full items-center gap-3'):
+                    with ui.column().classes('gap-0.5 flex-1'):
+                        ui.label(macro['name']).classes('us-subhead')
+                        ui.label(f"{len(macro['commands'])} commands").classes(
+                            'us-micro us-muted')
+                    _btn('Run', 'us-btn-secondary', lambda m=macro: run_macro(m))
+                    _btn('Delete', 'us-btn-ghost us-btn-danger',
+                         lambda k=i: delete_macro(k))
+
+    def show_macros_dialog():
+        dialog = ui.dialog()
+        with dialog, ui.column().classes('us-dialog w-[420px]'):
+            with ui.row().classes('w-full items-center justify-between'):
+                ui.label('Macros').classes('us-subhead')
+                _btn('New', 'us-btn-primary', lambda: _new_macro_from(dialog))
+            terminal_state['macros_host'] = ui.column().classes('w-full gap-2')
+            _render_macros()
+        dialog.open()
+
+    def _new_macro_from(parent):
+        parent.close()
+        dlg = ui.dialog()
+        with dlg, ui.column().classes('us-dialog w-[420px]'):
+            ui.label('New macro').classes('us-subhead')
+            name_input = ui.input('Name', value='').classes('w-full')
+            cmds_input = ui.textarea(
+                'Commands (one per line)', value='AT\\r\\nAT+STATUS').classes('w-full')
+            with ui.row().classes('w-full justify-end gap-2'):
+                _btn('Cancel', 'us-btn-ghost', dlg.close)
+                _btn('Create', 'us-btn-primary',
+                     lambda: create_macro(name_input.value, cmds_input.value, dlg))
+        dlg.open()
+
+    def show_history_dialog():
+        dialog = ui.dialog()
+        with dialog, ui.column().classes('us-dialog w-[480px]'):
+            ui.label('Command history').classes('us-subhead')
+            if not command_history:
+                ui.label('No commands sent yet').classes('us-body us-muted')
+            else:
+                with ui.column().classes('w-full gap-1'):
+                    for entry in command_history[:20]:
+                        with ui.row().classes('us-row w-full items-center gap-3').on(
+                                'click', lambda e, en=entry: replay_command(en)):
+                            ui.label(entry['timestamp']).classes('us-mono us-muted')
+                            ui.label(entry['cmd']).classes('us-mono flex-1 truncate')
+                            ui.html(icon('terminal', 14))
+        dialog.open()
+
+    # ── UI ───────────────────────────────────────────────────────────────
+    with ui.column().classes('w-full gap-3'):
+        with ui.row().classes('us-toolbar w-full items-center gap-3'):
+            with ui.column().classes('gap-0.5 flex-1 min-w-0'):
+                ui.label(selected_device.name or selected_device.port).classes(
+                    'us-subhead truncate')
+                ui.label(
+                    f"{selected_device.port} · {selected_device.baudrate:,} baud"
+                ).classes('us-micro us-mono us-muted')
+            ui.label('0 lines').classes('us-mono us-muted').bind_text_from(
+                terminal_state, 'lines', lambda v: f"{len(v):,} lines")
+
+        with ui.row().classes('us-toolbar w-full items-center gap-2'):
+            cmd_input = ui.input(
+                placeholder='Type a command and press Enter…').classes(
+                'flex-1 us-input').props('outlined dense')
+            _btn('Send', 'us-btn-primary', send_command)
+            _btn('Macros', 'us-btn-secondary', show_macros_dialog)
+            _btn('History', 'us-btn-secondary', show_history_dialog)
+        cmd_input.on('keydown.enter', send_command)
+
+        with ui.row().classes('us-toolbar w-full items-center gap-3'):
+            search_input = ui.input(placeholder='Search…').classes(
+                'flex-1 us-input').props('outlined dense')
+            search_input.bind_value(terminal_state, 'search')
+            level_select = ui.select(
+                ['all', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'metric', 'json'],
+                value='all').classes('w-32 us-input').props('outlined dense')
+            level_select.bind_value(terminal_state, 'filter_level')
+            _btn('Aa', 'us-btn-ghost', toggle_case)
+            _btn('.*', 'us-btn-ghost', toggle_regex)
+
+        with ui.row().classes('w-full items-center gap-2'):
+            match_label = ui.label('0 lines').classes('us-caption us-muted flex-1')
+            _btn('◀', 'us-btn-ghost', lambda: navigate_match(-1))
+            _btn('▶', 'us-btn-ghost', lambda: navigate_match(1))
+            _btn('Clear', 'us-btn-ghost', clear_search)
+            jump_bar = _btn('↓ Following', 'us-btn-ghost us-btn-jump', _jump_to_new)
+
+        log_area = ui.column().classes('us-log w-full gap-0')
+        # NiceGUI's js_handler is the supported way to have a JS listener emit a
+        # custom event into a Python handler, so the browser reports only the
+        # boolean that changed rather than every scroll frame.
+        log_area.on('follow-change', _on_follow_change, args=['following'],
+                    js_handler="() => {const e=$event.target;"
+                               "emit(e.__usFollow);}")
+
+    # First paint, then install the follow hook -- the hook needs the log element
+    # to already exist in the DOM.
+    _apply_search_filter()
+    _update_jump_bar()
+    ui.run_javascript(follow_hook_js())
+
     search_input.on_value_change(lambda: _apply_search_filter())
-    case_toggle.on_value_change(lambda: _apply_search_filter())
-    regex_toggle.on_value_change(lambda: _apply_search_filter())
     level_select.on_value_change(lambda: _apply_search_filter())
-    metric_input.on_value_change(lambda: _apply_search_filter())
 
     async def stream_loop():
         if not selected_device:
@@ -854,47 +1020,41 @@ def terminal_page():
         async def on_data(line=""):
             await queue.put(line)
 
-        await serial_reader.start_device(selected_device, "terminal", on_data)
+        try:
+            await serial_reader.start_device(selected_device, "terminal", on_data)
+        except Exception as e:
+            ui.notify(f"Could not attach to the stream: {e}", type='negative')
+            return
 
         try:
             while True:
                 line = await asyncio.wait_for(queue.get(), timeout=1)
-                ts = datetime.utcnow().strftime('%H:%M:%S')
-
-                # Detect line type
-                line_upper = line.upper()
-                if any(w in line_upper for w in ['ERROR', 'FATAL']):
-                    line_type = 'error'
-                elif any(w in line_upper for w in ['WARN', 'WARNING']):
-                    line_type = 'warn'
-                elif line.startswith('{') and line.endswith('}'):
-                    line_type = 'json'
-                elif any(line_upper.startswith(m) for m in ['TEMP', 'VOLTAGE', 'HUMIDITY', 'PRESSURE', 'CURRENT', 'POWER', 'ADC', 'PWM', 'FREQ', 'RSSI', 'SNR']):
-                    line_type = 'metric'
-                else:
-                    line_type = 'log'
-
-                terminal_state['lines'].append((ts, line, line_type))
-
-                # Keep max 5000 lines in memory
-                if len(terminal_state['lines']) > 5000:
-                    terminal_state['lines'] = terminal_state['lines'][-5000:]
-
-                # Incremental render (every 10 lines for performance)
-                if len(terminal_state['lines']) % 1 == 0:
-                    _apply_search_filter()
-        except asyncio.TimeoutError:
-            pass
+                terminal_state['lines'].append((
+                    datetime.utcnow().strftime('%H:%M:%S'), line, _classify(line)))
+                # Keep the buffer bounded; the painted window is capped anyway.
+                del terminal_state['lines'][:-5000]
+                _apply_search_filter()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A read loop that dies silently looks identical to a device that
+            # stopped talking, which is the single most confusing failure a
+            # serial tool can have.
+            logger.exception("terminal stream loop for %s failed",
+                             selected_device.id)
+            ui.notify("Stream stopped unexpectedly", type='negative')
 
     asyncio.create_task(stream_loop())
-
 
 def charts_page():
     """Live charts - telemetry visualization with custom dashboard builder."""
     global selected_device
 
     if not selected_device:
-        ui.label('Select a device from Devices tab to view charts').classes('text-[#52525b]').style('padding: 40px')
+        needs_device(
+            'No device selected',
+            'Charts plot the metrics a device reports. Start one on the '
+            'Devices screen, then come back here.')
         return
 
     # Dashboard state
@@ -904,13 +1064,15 @@ def charts_page():
         'next_id': 1,
     }
 
+    _bind_charts_page, _late_charts_page = _late_bindings()
+
     with ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto'):
         # Header with controls
         with ui.row().classes('w-full items-center justify-between mb-3'):
             with ui.row().classes('items-center gap-3'):
                 ui.label(f"📊 Dashboard - {selected_device.name}").classes('text-[#e4e4e7] font-medium')
                 ui.button('⊞ Edit', on_click=lambda: toggle_edit()).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
-                ui.button('+ Add Widget', on_click=show_add_widget_dialog).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+                ui.button('+ Add Widget', on_click=_late_charts_page('show_add_widget_dialog')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
 
         # Available metrics info
         latest = telemetry_engine.get_latest_values(selected_device.id)
@@ -926,7 +1088,7 @@ def charts_page():
         dashboard_state['edit_mode'] = not dashboard_state['edit_mode']
         refresh_dashboard()
 
-    def show_add_widget_dialog():
+    def _show_add_widget_dialog_impl():
         dialog = ui.dialog()
         with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
             ui.label('Add Widget').classes('text-white font-medium mb-4 text-lg')
@@ -944,6 +1106,8 @@ def charts_page():
                     type_select.value, title_input.value or f"{metric_select.value}",
                     metric_select.value, size_select.value, dialog
                 )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+
+    _bind_charts_page('show_add_widget_dialog', _show_add_widget_dialog_impl)
 
     def add_widget(widget_type, title, metric, size, dialog):
         widget = {
@@ -1068,6 +1232,8 @@ def charts_page():
 
 
 def alerts_page():
+
+    _bind_alerts_page, _late_alerts_page = _late_bindings()
     """Alert management - rules, history, acknowledgment."""
     def refresh_alerts():
         rules = get_alert_rules()
@@ -1096,7 +1262,7 @@ def alerts_page():
         with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
             with ui.row().classes('w-full items-center justify-between mb-3'):
                 ui.label('Alert Rules').classes('text-white font-medium')
-                ui.button('+ New Rule', on_click=show_add_rule_dialog).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+                ui.button('+ New Rule', on_click=_late_alerts_page('show_add_rule_dialog')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
 
             if not rules:
                 ui.label('No alert rules configured').classes('text-[#52525b] text-sm py-4')
@@ -1119,7 +1285,7 @@ def alerts_page():
             with ui.row().classes('w-full items-center justify-between mb-3'):
                 ui.label('Recent Alerts').classes('text-white font-medium')
                 if events:
-                    ui.button('Ack All', on_click=ack_all).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
+                    ui.button('Ack All', on_click=_late_alerts_page('ack_all')).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
 
             if not events:
                 ui.label('No alerts yet').classes('text-[#52525b] text-sm py-4')
@@ -1137,7 +1303,7 @@ def alerts_page():
                             else:
                                 ui.label('✓ Acked').classes('text-[#22c55e] text-xs')
 
-    def show_add_rule_dialog():
+    def _show_add_rule_dialog_impl():
         dialog = ui.dialog()
         with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
             ui.label('New Alert Rule').classes('text-white font-medium mb-4 text-lg')
@@ -1153,6 +1319,8 @@ def alerts_page():
                 ui.button('Create', on_click=lambda: create_rule(
                     name.value, metric.value, condition.value, threshold.value, cooldown.value, dialog
                 )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+
+    _bind_alerts_page('show_add_rule_dialog', _show_add_rule_dialog_impl)
 
     async def create_rule(name, metric, condition, threshold, cooldown, dialog):
         rule = AlertRule(
@@ -1173,7 +1341,7 @@ def alerts_page():
         alert_engine.acknowledge_alert(alert.get('id', ''))
         refresh_alerts()
 
-    async def ack_all():
+    async def _ack_all_impl():
         for alert in get_alert_events():
             alert_engine.acknowledge_alert(alert.get('id', ''))
         refresh_alerts()
@@ -1181,6 +1349,8 @@ def alerts_page():
     # Poll for new alerts every 2 seconds and show toast notifications
     import asyncio
     _last_alert_count = len(get_alert_events())
+
+    _bind_alerts_page('ack_all', _ack_all_impl)
 
     async def check_new_alerts():
         nonlocal _last_alert_count
@@ -1248,6 +1418,8 @@ def sessions_page():
 
 
 def session_detail_page():
+
+    _bind_session_detail_page, _late_session_detail_page = _late_bindings()
     """Session detail with timeline replay."""
     global selected_session
 
@@ -1259,7 +1431,7 @@ def session_detail_page():
 
     with ui.column().classes('w-full gap-4'):
         with ui.row().classes('w-full items-center gap-3'):
-            ui.button('← Back', on_click=go_back).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
+            ui.button('← Back', on_click=_late_session_detail_page('go_back')).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
             with ui.column():
                 ui.label(session.get('name', 'Unnamed')).classes('text-white font-medium')
                 ui.label(f"{session.get('packet_count', 0)} packets").classes('text-[#52525b] text-xs')
@@ -1276,7 +1448,7 @@ def session_detail_page():
             with ui.tab_panel(t1):
                 with ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto'):
                     with ui.row().classes('w-full items-center gap-3'):
-                        ui.button('▶ Replay', on_click=start_replay).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+                        ui.button('▶ Replay', on_click=_late_session_detail_page('start_replay')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
                         ui.select([0.5, 1, 2, 5, 10], value=1).classes('bg-[rgba(255,255,255,0.02)] text-[#e4e4e7] border border-[rgba(255,255,255,0.10)] px-2 py-1 text-sm rounded-lg')
                         ui.label(f"0 packets").classes('text-[#71717a] text-xs font-mono')
 
@@ -1456,16 +1628,19 @@ def session_detail_page():
                         ui.label(f"Actual: {r['actual']}").classes('text-[#e4e4e7] text-xs font-mono')
                         ui.label(f"Δ {r['diff']}").style(f'color: {color}').classes('text-xs font-mono')
 
-    def go_back():
+    def _go_back_impl():
         global current_tab, selected_session
         current_tab = 'sessions'
         selected_session = None
         rebuild()
 
-    async def start_replay():
+    _bind_session_detail_page('go_back', _go_back_impl)
+
+    async def _start_replay_impl():
         ui.notify('Replay started', type='info')
 
 
+    _bind_session_detail_page('start_replay', _start_replay_impl)
 def performance_page():
     """Performance Analytics - packet rate, throughput, latency, errors, uptime."""
     def refresh_performance():
@@ -1593,6 +1768,8 @@ def performance_page():
 
 
 def mqtt_page():
+
+    _bind_mqtt_page, _late_mqtt_page = _late_bindings()
     """MQTT Integration - broker connections, subscriptions, message history."""
     import time as _time
 
@@ -1618,7 +1795,7 @@ def mqtt_page():
         with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
             with ui.row().classes('w-full items-center justify-between mb-3'):
                 ui.label('Broker Connections').classes('text-white font-medium')
-                ui.button('+ Add Broker', on_click=show_add_broker_dialog).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+                ui.button('+ Add Broker', on_click=_late_mqtt_page('show_add_broker_dialog')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
 
             if not profiles:
                 ui.label('No MQTT connections configured').classes('text-[#52525b] text-sm py-4')
@@ -1682,7 +1859,7 @@ def mqtt_page():
                             ui.label(msg.payload[:80]).classes('text-[#e4e4e7] text-xs flex-1 font-mono')
 
     # Actions
-    def show_add_broker_dialog():
+    def _show_add_broker_dialog_impl():
         dialog = ui.dialog()
         with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
             ui.label('Add MQTT Broker').classes('text-white font-medium mb-4 text-lg')
@@ -1698,6 +1875,8 @@ def mqtt_page():
                     name.value, broker.value, int(port.value), topic_prefix.value,
                     username.value or None, password.value or None, dialog
                 )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+
+    _bind_mqtt_page('show_add_broker_dialog', _show_add_broker_dialog_impl)
 
     async def create_broker(name, broker, port, topic_prefix, username, password, dialog):
         from app.core.mqtt_client import MQTTConnectionProfile
@@ -1909,12 +2088,14 @@ def decoder_page():
     """Protocol decoder - hex input, decode, structured output, DBC file loading."""
     dbc_info = {'loaded': False, 'messages': 0, 'signals': 0}
 
+    _bind_decoder_page, _late_decoder_page = _late_bindings()
+
     with ui.column().classes('w-full gap-4'):
         # DBC file loader
         with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(113,112,255,0.2)'):
             with ui.row().classes('w-full items-center justify-between mb-2'):
                 ui.label('📁 CAN Database (.dbc)').classes('text-white font-medium')
-                ui.button('Load DBC File', on_click=show_dbc_upload_dialog).classes('bg-[#5c8af0] text-white px-3 py-1 text-sm rounded-lg')
+                ui.button('Load DBC File', on_click=_late_decoder_page('show_dbc_upload_dialog')).classes('bg-[#5c8af0] text-white px-3 py-1 text-sm rounded-lg')
             with ui.row().classes('w-full items-center gap-3'):
                 ui.label('Status:').classes('text-[#71717a] text-xs')
                 dbc_status_label = ui.label('No DBC loaded').classes('text-[#52525b] text-xs font-mono')
@@ -1933,7 +2114,7 @@ def decoder_page():
 
         result_container = ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto')
 
-        def show_dbc_upload_dialog():
+        def _show_dbc_upload_dialog_impl():
             """Dialog to paste DBC file content."""
             dialog = ui.dialog()
             with dialog, ui.card().classes('p-6 w-[600px]').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
@@ -1968,6 +2149,8 @@ def decoder_page():
                     ui.notify('DBC decoder not available', type='negative')
             except Exception as e:
                 ui.notify(f'Error: {e}', type='negative')
+
+        _bind_decoder_page('show_dbc_upload_dialog', _show_dbc_upload_dialog_impl)
 
         async def do_decode(raw_hex, proto_id):
             result_container.clear()
@@ -2095,9 +2278,42 @@ _TAB_SUBTITLES = {
 }
 
 
+def _demo_device():
+    """A device-shaped stand-in for previewing screens without hardware.
+
+    Deliberately not registered with device_manager: nothing here opens a real
+    port, so this is safe to construct for a render.
+    """
+    return types.SimpleNamespace(
+        id='demo-device', name='Demo board', port='/dev/ttyUSB0',
+        baudrate=115200, board_type='ESP32', status='registered',
+        auto_reconnect=True, session_id=None, serial_conn=None,
+        metadata={},
+    )
+
+
 @ui.page('/')
-def main_page():
-    global content_container
+@ui.page('/smoke/{tab}')
+def main_page(tab: str = 'devices', with_device: bool = False):
+    """Build the shell.
+
+    The /smoke/<tab> route exists so smoke_pages.py can boot every screen over
+    real HTTP. v1 had no way to reach a screen without clicking to it, which is
+    how the Terminal and Decoder both sat broken in the repo: each raised
+    UnboundLocalError on construction and the only evidence was a server log.
+
+    `with_device` binds a device without opening a real port, so the
+    device-scoped screens can be rendered and reviewed without hardware. The
+    screens that need one build a completely different tree, and reviewing only
+    the no-device path would miss most of their code.
+    """
+    global content_container, current_tab, selected_device
+
+    if tab in NAV_TAB_IDS:
+        current_tab = tab
+
+    if with_device and selected_device is None:
+        selected_device = _demo_device()
 
     # v2 design system: tokens + Inter/JetBrains Mono. Must run before any
     # screen is built so the first paint is already themed.

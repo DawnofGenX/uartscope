@@ -49,8 +49,10 @@ SURFACE: dict[str, str] = {
     "panel": "#1e1e1c",     # warm step up, keeps the olive undertone
     "elevated": "#30302e",  # Dark Surface — cards, popovers
     "overlay": "#383835",   # menus, dialogs
-    # Hairlines: warm, not white. Claude's Border Cream at low alpha.
-    "line": "rgba(176,174,165,0.16)",
+    # Recessed wells: the terminal log and code blocks read as *below* the page,
+    # so they sit under base rather than above panel.
+    "sunken": "#0e0e0d",
+    "line": "rgba(176,174,165,0.16)",   # hairline, warm not white
     "line_strong": "rgba(176,174,165,0.30)",
 }
 
@@ -357,6 +359,51 @@ body, .q-body {{
   0%, 100% {{ box-shadow:0 0 0 0 {st['live']}33; }}
   50%      {{ box-shadow:0 0 0 4px transparent; }}
 }}
+
+/* ── Log / terminal ──────────────────────────────────────────────────────── */
+.us-log {{
+  max-height: 58vh; overflow-y:auto; width:100%;
+  background:{SURFACE['sunken']}; padding:{sp['3']};
+  border:1px solid {SURFACE['line']}; border-radius:{r['md']};
+  font-family:{TYPE['mono']}; font-size:13px;
+  /* A dense log should feel like a column of text, not a stack of boxes. */
+  overflow-anchor:none;
+}}
+/* Pre-sticky is a browser default; anchor scrolling would fight follow-mode
+   when new rows are inserted, which is exactly what we do not want. */
+.us-log-line {{ line-height:1.55; white-space:pre-wrap; word-break:break-word; }}
+.us-log-error  {{ color:{STATUS['error']}; }}
+.us-log-warn   {{ color:{STATUS['warn']}; }}
+.us-log-metric {{ color:{STATUS['info']}; }}
+.us-log-json   {{ color:{STATUS['live']}; }}
+.us-log-log    {{ color:{TEXT['secondary']}; }}
+.us-log-more {{
+  color:{TEXT['muted']}; font-style:italic; padding-bottom:{sp['2']};
+  border-bottom:1px solid {SURFACE['line']}; margin-bottom:{sp['2']};
+  display:block;
+}}
+.us-btn-jump {{ min-width:150px; justify-content:center; }}
+
+/* ── Toolbar / dialog / input ───────────────────────────────────────────── */
+.us-toolbar {{
+  background:{SURFACE['panel']}; border:1px solid {SURFACE['line']};
+  border-radius:{r['md']}; padding:{sp['2']} {sp['3']};
+}}
+.us-dialog {{
+  background:{SURFACE['elevated']}; border:1px solid {SURFACE['line_strong']};
+  border-radius:{r['lg']}; padding:{sp['5']}; gap:{sp['3']};
+  box-shadow:0 24px 48px rgba(0,0,0,0.45);
+}}
+/* Quasar's outlined inputs ship a bright focus ring and a dark fill; retarget
+   both to the theme so inputs do not read as a different product. */
+.us-input .q-field__control {{
+  background:{SURFACE['sunken']} !important;
+  border-radius:{r['sm']} !important;
+}}
+.us-input .q-field__native, .us-input .q-field__input {{ color:{TEXT['primary']} !important; }}
+.us-input .q-field__label {{ color:{TEXT['muted']} !important; }}
+.us-input.q-field--focused .q-field__control:after {{ border-color:{ACCENT['text']} !important; }}
+.us-input.q-field--focused .q-field__label {{ color:{ACCENT['text']} !important; }}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .us-btn {{
