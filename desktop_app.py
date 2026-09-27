@@ -18,6 +18,8 @@ from uartscope_theme import (
     inject_theme_css,
     icon,
     STATUS,
+    ACCENT,
+    TEXT,
 )
 
 from app.core.device_manager import device_manager
@@ -201,6 +203,11 @@ def _refresh_status():
         headline = f"{connected} of {total} connected"
     elif total:
         headline = f"{total} registered, none started"
+    elif selected_device is not None:
+        # A device is bound (preview/demo, or a selection made earlier in this
+        # session) but none is registered with the manager. Saying "No devices"
+        # here contradicts the page body, which is showing that device's data.
+        headline = "Preview device"
     else:
         headline = "No devices"
 
@@ -1047,7 +1054,26 @@ def terminal_page():
     asyncio.create_task(stream_loop())
 
 def charts_page():
-    """Live charts - telemetry visualization with custom dashboard builder."""
+    """Charts: the Monitor surface.
+
+    v1 built a "dashboard builder": you hand-pick widgets, each bound to one
+    metric, and every one of them is a card. That is the wrong shape for this
+    screen, and the reasoning is physical rather than stylistic:
+
+      * A chart puts comparable series on one Y axis. v1 let you pin any set of
+        metrics to one card, so degrees Celsius were drawn against dBm and the
+        resulting curve was meaningless. The backend already records a unit per
+        metric; v1 threw it away. v2 groups series by unit and never mixes them.
+      * The units were not even available. The KEY:VALUE parser -- the common
+        form -- left unit=None for bare lines like "TEMP:23.4", so there was
+        nothing to group by. Fixed in telemetry_engine._parse, with tests.
+      * A dashboard you have to assemble by hand starts empty and stays empty.
+        Metrics a device is already reporting are the obvious first view, so v2
+        opens on them and lets you add, pin and hide from there.
+
+    Widgets still exist -- pinned series, gauges, alert summary -- but they sit
+    on top of the live view instead of being the only way in.
+    """
     global selected_device
 
     if not selected_device:
@@ -1059,177 +1085,334 @@ def charts_page():
 
     # Dashboard state
     dashboard_state = {
-        'widgets': [],  # list of {id, type, metric, title, size}
+        'widgets': [],   # pinned series the user explicitly added
         'edit_mode': False,
         'next_id': 1,
+        'pinned': set(),  # metric names the user chose to pin
+        'hidden': set(),  # metric names the user folded away
     }
 
     _bind_charts_page, _late_charts_page = _late_bindings()
 
-    with ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto'):
-        # Header with controls
-        with ui.row().classes('w-full items-center justify-between mb-3'):
-            with ui.row().classes('items-center gap-3'):
-                ui.label(f"📊 Dashboard - {selected_device.name}").classes('text-[#e4e4e7] font-medium')
-                ui.button('⊞ Edit', on_click=lambda: toggle_edit()).classes('bg-[rgba(255,255,255,0.03)] text-[#71717a] border border-[rgba(255,255,255,0.10)] px-3 py-1 text-sm rounded-lg')
-                ui.button('+ Add Widget', on_click=_late_charts_page('show_add_widget_dialog')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+    # ── Metric discovery ─────────────────────────────────────────────────
+    # One source of truth, so the axis groups, the legend and the pin state can
+    # never disagree about which metrics exist or what unit they carry.
+    def metrics_by_unit():
+        """-> {unit: [(name, [values...], latest), ...]}, ordered for reading."""
+        raw = telemetry_engine.get_all_metrics(selected_device.id) or {}
+        groups: dict = {}
+        for name, history in raw.items():
+            if not history:
+                continue
+            unit = history[-1].unit or '—'   # em dash: "no unit", not a guess
+            values = [m.value for m in history[-60:]]
+            groups.setdefault(unit, []).append((name, values, history[-1].value))
+        for unit in groups:
+            groups[unit].sort(key=lambda t: t[0])
+        # No-unit series last: they are the ones you have to read a legend for.
+        return dict(sorted(groups.items(),
+                           key=lambda kv: (kv[0] == '—', kv[0])))
 
-        # Available metrics info
-        latest = telemetry_engine.get_latest_values(selected_device.id)
-        if latest:
-            with ui.row().classes('w-full gap-2 flex-wrap mb-2'):
-                for name, value in latest.items():
-                    ui.label(f"{name}: {value:.2f}").classes('text-[#52525b] text-xs font-mono bg-[rgba(255,255,255,0.02)] px-2 py-0.5 rounded')
-
-        # Dashboard grid
-        dashboard_container = ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto')
+    def available_metrics():
+        return metrics_by_unit()
 
     def toggle_edit():
         dashboard_state['edit_mode'] = not dashboard_state['edit_mode']
         refresh_dashboard()
 
+    # ── Rendering helpers ────────────────────────────────────────────────
+    def _fmt(v):
+        """Format a value without lying about precision."""
+        if v is None:
+            return '—'
+        av = abs(v)
+        if av >= 1000:
+            return f'{v:,.0f}'
+        if av >= 100:
+            return f'{v:.1f}'
+        if av >= 1:
+            return f'{v:.2f}'
+        return f'{v:.3f}'
+
+    def _sparkline(values, unit):
+        """A 20-sample block sparkline. Colour is the series' unit group, so a
+        glance distinguishes temperature from signal strength."""
+        vals = values[-20:]
+        if len(vals) < 2:
+            return ''
+        lo, hi = min(vals), max(vals)
+        rng = (hi - lo) or 1.0
+        ramp = ' ▁▂▃▄▅▆▇█'
+        return ''.join(
+            ramp[min(int(((v - lo) / rng) * 8), 8)] for v in vals)
+
+    def _trend(values):
+        """Direction of travel, as a word plus a glyph -- never colour alone."""
+        if len(values) < 2:
+            return None
+        delta = values[-1] - values[-2]
+        if abs(delta) < 1e-9:
+            return ('flat', '→', 'steady')
+        rel = abs(delta) / (abs(values[-2]) or 1.0)
+        if rel < 0.01:
+            return ('flat', '→', 'steady')
+        return ('up', '↑', 'rising') if delta > 0 else ('down', '↓', 'falling')
+
+    # ── UI ───────────────────────────────────────────────────────────────
+    with ui.column().classes('w-full gap-4'):
+        with ui.row().classes('w-full items-center justify-between'):
+            with ui.column().classes('gap-1'):
+                ui.label('Telemetry').classes('us-title')
+                with ui.row().classes('items-center gap-2'):
+                    ui.label(selected_device.name or selected_device.port).classes(
+                        'us-mono us-muted')
+                    ui.label('·').classes('us-muted')
+                    ui.label('live').classes('us-micro').style(
+                        f'color: {STATUS["live"]}')
+            with ui.row().classes('items-center gap-2'):
+                _btn('Edit', 'us-btn-ghost', toggle_edit)
+                _btn('Add series', 'us-btn-primary',
+                     _late_charts_page('show_add_widget_dialog'))
+
+        # Live metric discovery: everything the device is reporting, grouped so
+        # each group shares one axis and therefore one unit.
+        dashboard_container = ui.column().classes('w-full gap-5')
+
+    def refresh_dashboard():
+        dashboard_container.clear()
+        groups = available_metrics()
+        widgets = dashboard_state['widgets']
+        # Re-enter explicitly: clear() leaves the ambient context pointing at a
+        # deleted slot, and rebuilding without this raises at runtime.
+        with dashboard_container:
+            if not groups:
+                _charts_empty(available_metrics)
+                return
+
+            # At-a-glance header: how many metrics, across how many axes, and
+            # is anything actually moving. A pill per metric here would just
+            # duplicate the rows below it, which already carry value, unit,
+            # sparkline and trend.
+            total_series = sum(len(s) for s in groups.values())
+            latest_by_name = {name: last
+                              for series in groups.values()
+                              for name, _v, last in series}
+            moving = []
+            for unit, series in groups.items():
+                for name, vals, _last in series:
+                    tr = _trend(vals)
+                    if tr and tr[0] != 'flat':
+                        moving.append((name, unit, tr))
+            with ui.row().classes('w-full gap-2 flex-wrap items-center'):
+                with ui.column().classes('us-metric-pill !py-2'):
+                    ui.label('metrics').classes('us-micro us-muted')
+                    ui.label(f'{total_series}').classes('us-mono')
+                with ui.column().classes('us-metric-pill !py-2'):
+                    ui.label('axes (by unit)').classes('us-micro us-muted')
+                    ui.label(f'{len(groups)}').classes('us-mono')
+                if moving:
+                    with ui.column().classes('us-metric-pill !py-2 flex-1 min-w-0'):
+                        ui.label('in motion').classes('us-micro us-muted')
+                        with ui.row().classes('items-baseline gap-3 flex-wrap'):
+                            for name, unit, tr in moving[:6]:
+                                with ui.row().classes('items-baseline gap-1'):
+                                    ui.label(tr[1]).classes('us-trend').style(
+                                        f'color: {STATUS["live" if tr[0] == "up" else "info"]}')
+                                    ui.label(f'{name}').classes('us-micro us-muted truncate')
+                                    ui.label(_fmt(latest_by_name[name])).classes(
+                                        'us-micro us-mono')
+                                    if unit != '—':
+                                        ui.label(unit).classes('us-micro us-muted')
+                else:
+                    with ui.column().classes('us-metric-pill !py-2'):
+                        ui.label('in motion').classes('us-micro us-muted')
+                        ui.label('all steady').classes('us-mono us-muted')
+
+            # One block per unit. This is the fix: a Y axis only ever holds
+            # series measured the same way.
+            for unit, series in groups.items():
+                with ui.column().classes('w-full gap-2'):
+                    with ui.row().classes('items-center gap-2'):
+                        # The symbol is shown verbatim (see .us-unit) but never
+                        # alone: a bare "dBm" in a heading is ambiguous, so the
+                        # count of series on this axis goes with it.
+                        ui.label(unit).classes('us-unit')
+                        ui.label(
+                            'no unit reported — scale is relative only'
+                            if unit == '—'
+                            else f"{len(series)} series"
+                        ).classes('us-micro us-muted')
+                    with ui.column().classes('w-full gap-2'):
+                        for name, vals, last in series:
+                            pinned = name in dashboard_state['pinned']
+                            _series_row(name, vals, last, unit, pinned)
+
+            if widgets:
+                ui.label('PINNED').classes('us-label us-muted mt-2')
+                with ui.row().classes('w-full gap-3'):
+                    for widget in widgets:
+                        _render_widget(widget)
+
+    def _series_row(name, vals, last, unit, pinned):
+        """One metric: name, value, sparkline, and the actions to pin/hide."""
+        with ui.row().classes('us-row w-full items-center gap-4'):
+            with ui.column().classes('gap-0.5 flex-1 min-w-0'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.label(name).classes('us-subhead truncate')
+                    if pinned:
+                        ui.label('pinned').classes('us-micro').style(
+                            f'color: {ACCENT["text"]}')
+                with ui.row().classes('items-baseline gap-2'):
+                    ui.label(_fmt(last)).classes('us-mono')
+                    if unit != '—':
+                        ui.label(unit).classes('us-micro us-muted')
+            spark = _sparkline(vals, unit)
+            if spark:
+                ui.label(spark).classes('us-spark')
+            tr = _trend(vals)
+            if tr:
+                ui.label(tr[1]).classes('us-trend').style(
+                    f'color: {STATUS["live" if tr[0] == "up" else "info" if tr[0] == "down" else "idle"]}')
+            if dashboard_state['edit_mode']:
+                _btn('Unpin' if pinned else 'Pin',
+                     'us-btn-ghost',
+                     lambda n=name, p=pinned: _toggle_pin(n, p))
+
+    def _toggle_pin(name, pinned):
+        if pinned:
+            dashboard_state['pinned'].discard(name)
+        else:
+            dashboard_state['pinned'].add(name)
+        refresh_dashboard()
+
+    def _charts_empty(_getter):
+        """A screen that waits on data says what it is waiting for."""
+        with ui.column().classes('us-empty w-full'):
+            with ui.column().classes('gap-2'):
+                ui.label('Waiting for telemetry').classes('us-display')
+                ui.label(
+                    f'{selected_device.name or "This device"} is connected but '
+                    'has not reported a metric yet. Charts appear here as '
+                    'soon as the stream carries something plottable.'
+                ).classes('us-body')
+            ui.label(
+                'A metric is recognised from a line like  TEMP:23.4  or  '
+                '{"temp": 23.4}, and grouped by unit so the axis always '
+                'matches the data.').classes('us-micro us-muted')
+
+    # ── Pinned widgets (v1's dashboard builder, kept as a layer on top) ──
     def _show_add_widget_dialog_impl():
+        groups = available_metrics()
+        if not groups:
+            ui.notify('No metrics reported yet', type='warning')
+            return
         dialog = ui.dialog()
-        with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
-            ui.label('Add Widget').classes('text-white font-medium mb-4 text-lg')
-            type_select = ui.select(['Metric Card', 'Line Chart', 'Gauge', 'Alert Summary', 'Log Table'], value='Metric Card').classes('w-full mb-3').props('outlined').style('color: #e4e4e7')
-            title_input = ui.input('Title', value='').classes('w-full mb-3').props('outlined').style('color: #e4e4e7')
+        with dialog, ui.column().classes('us-dialog w-[440px]'):
+            ui.label('Pin a series').classes('us-subhead')
+            ui.label(
+                'Pinned series keep a fixed history of their own, independent '
+                'of the live view.').classes('us-micro us-muted')
+            options = [(f'{name} ({unit})', name)
+                       for unit, series in groups.items()
+                       for name, _v, _l in series]
             metric_select = ui.select(
-                list(latest.keys()) if latest else ['TEMP'],
-                value=list(latest.keys())[0] if latest else 'TEMP',
-                label='Metric'
-            ).classes('w-full mb-3').props('outlined').style('color: #e4e4e7')
-            size_select = ui.select(['Small', 'Medium', 'Large'], value='Medium').classes('w-full mb-4').props('outlined').style('color: #e4e4e7')
-            with ui.row().classes('gap-2 justify-end w-full'):
-                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
-                ui.button('Add', on_click=lambda: add_widget(
-                    type_select.value, title_input.value or f"{metric_select.value}",
-                    metric_select.value, size_select.value, dialog
-                )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+                options, value=options[0][1] if options else None,
+                label='Metric').classes('w-full')
+            type_select = ui.select(
+                ['Metric Card', 'Line Chart', 'Gauge'], value='Metric Card'
+            ).classes('w-full')
+            with ui.row().classes('w-full justify-end gap-2'):
+                _btn('Cancel', 'us-btn-ghost', dialog.close)
+                _btn('Pin', 'us-btn-primary', lambda: add_widget(
+                    type_select.value, metric_select.value, dialog))
+        dialog.open()
 
-    _bind_charts_page('show_add_widget_dialog', _show_add_widget_dialog_impl)
-
-    def add_widget(widget_type, title, metric, size, dialog):
+    def add_widget(widget_type, metric, dialog):
+        if not metric:
+            return
         widget = {
             'id': dashboard_state['next_id'],
-            'type': widget_type,
-            'title': title,
-            'metric': metric,
-            'size': size,
-            'history': [],  # for charts
+            'type': widget_type, 'title': metric, 'metric': metric,
+            'size': 'Medium', 'history': [],
         }
         dashboard_state['next_id'] += 1
         dashboard_state['widgets'].append(widget)
         dialog.close()
-        ui.notify(f"Widget '{title}' added", type='positive')
+        ui.notify(f'Pinned {metric}', type='positive')
         refresh_dashboard()
 
     def remove_widget(widget_id):
-        dashboard_state['widgets'] = [w for w in dashboard_state['widgets'] if w['id'] != widget_id]
+        dashboard_state['widgets'] = [
+            w for w in dashboard_state['widgets'] if w['id'] != widget_id]
         refresh_dashboard()
 
-    def refresh_dashboard():
-        dashboard_container.clear()
-        widgets = dashboard_state['widgets']
-
-        if not widgets:
-            with dashboard_container:
-                with ui.card().classes('w-full p-12 text-center') \
-                    .style('background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.1)'):
-                    ui.label('◇').classes('text-4xl text-[#5c8af0] mb-2')
-                    ui.label('No widgets yet').classes('text-[#e4e4e7] font-medium')
-                    ui.label('Click "+ Add Widget" to build your dashboard').classes('text-[#52525b] text-sm')
-            return
-
-        # Render grid
-        with dashboard_container:
-            cols = 2 if widgets else 1
-            for i in range(0, len(widgets), cols):
-                with ui.row().classes('w-full gap-3'):
-                    for widget in widgets[i:i+cols]:
-                        _render_widget(widget)
-
     def _render_widget(widget):
-        """Render a single dashboard widget."""
-        size_classes = {'Small': 'min-w-36', 'Medium': 'flex-1', 'Large': 'w-full'}
-        size_class = size_classes.get(widget['size'], 'flex-1')
-
-        with ui.card().classes(f'p-4 {size_class}') \
-            .style('background: #16181d; border-left: 2px solid #5c8af0'):
-            with ui.row().classes('w-full items-center justify-between mb-2'):
-                ui.label(widget['title']).classes('text-white font-medium text-sm')
+        """A pinned series. v1's widget, restyled and -- crucially -- with the
+        unit attached to the value rather than dropped."""
+        history = widget.get('history', [])
+        unit = _unit_for(widget['metric'])
+        with ui.column().classes('us-card w-[220px] gap-2'):
+            with ui.row().classes('w-full items-center justify-between'):
+                ui.label(widget['title']).classes('us-subhead truncate')
                 if dashboard_state['edit_mode']:
-                    ui.button('✕', on_click=lambda w=widget: remove_widget(w['id'])).classes('text-[#ef4444] text-xs px-1')
+                    _btn('✕', 'us-btn-ghost us-btn-danger',
+                         lambda w=widget: remove_widget(w['id']))
 
-            # Metric Card
             if widget['type'] == 'Metric Card':
-                latest = telemetry_engine.get_latest_values(selected_device.id)
-                val = latest.get(widget['metric'], 0)
-                ui.label(f"{val:.2f}").classes('text-2xl font-medium text-white font-mono')
-                ui.label(widget['metric']).classes('text-[#71717a] text-xs uppercase tracking-wider')
-
-            # Gauge
-            elif widget['type'] == 'Gauge':
-                latest = telemetry_engine.get_latest_values(selected_device.id)
-                val = latest.get(widget['metric'], 0)
-                # Simple text-based gauge
-                pct = min(100, max(0, (val / 100) * 100))  # assume 0-100 range
-                filled = int(pct / 5)
-                empty = 20 - filled
-                ui.label(f"{val:.1f}").classes('text-xl font-medium text-white font-mono')
-                ui.label('█' * filled + '░' * empty).classes('text-[#5c8af0] text-xs font-mono')
-                ui.label(widget['metric']).classes('text-[#71717a] text-[10px] uppercase')
-
-            # Line Chart (text-based sparkline)
+                ui.label(_fmt(history[-1] if history else None)).classes(
+                    'us-metric us-mono')
+                if unit and unit != '—':
+                    ui.label(unit).classes('us-micro us-muted')
             elif widget['type'] == 'Line Chart':
-                history = widget.get('history', [])
-                if len(history) > 1:
-                    chart_vals = history[-20:]
-                    max_v = max(chart_vals) if chart_vals else 1
-                    min_v = min(chart_vals) if chart_vals else 0
-                    range_v = max_v - min_v if max_v != min_v else 1
-                    bars = []
-                    for v in chart_vals:
-                        height = int(((v - min_v) / range_v) * 8) if range_v > 0 else 4
-                        bars.append(' ▁▂▃▄▅▆▇█'[min(height, 8)])
-                    ui.label(''.join(bars)).classes('text-[#22c55e] text-lg font-mono leading-none')
-                    ui.label(f"{history[-1]:.2f} ({min_v:.1f}-{max_v:.1f})").classes('text-[#71717a] text-xs font-mono')
+                spark = _sparkline(history, unit)
+                ui.label(spark or '…').classes('us-spark')
+                if history:
+                    ui.label(
+                        f'{_fmt(min(history[-20:]))}–{_fmt(max(history[-20:]))}'
+                    ).classes('us-micro us-mono us-muted')
                 else:
-                    ui.label('Collecting data...').classes('text-[#52525b] text-sm')
-                ui.label(widget['metric']).classes('text-[#71717a] text-[10px] uppercase')
+                    ui.label('collecting').classes('us-micro us-muted')
+            elif widget['type'] == 'Gauge':
+                val = history[-1] if history else None
+                ui.label(_fmt(val)).classes('us-metric us-mono')
+                # v1 assumed every metric was 0-100, which is only true of
+                # humidity. Without a known range, show share-of-span honestly.
+                if history:
+                    lo, hi = min(history[-20:]), max(history[-20:])
+                    rng = (hi - lo) or 1.0
+                    filled = int(((val - lo) / rng) * 20)
+                    ui.label('█' * max(0, min(20, filled))
+                             + '░' * max(0, 20 - filled)).classes('us-micro us-mono')
+            ui.label(widget['metric']).classes('us-micro us-muted truncate')
 
-            # Alert Summary
-            elif widget['type'] == 'Alert Summary':
-                events = alert_engine.get_alert_history()
-                unack = len([a for a in events if not a.get('acknowledged')])
-                with ui.row().classes('items-center gap-2'):
-                    alert_color = '#ef4444' if unack > 0 else '#22c55e'
-                    ui.label(str(unack)).classes('text-xl font-medium').style(f'color: {alert_color}')
-                    ui.label('unacked alerts').classes('text-[#71717a] text-xs')
+    def _unit_for(metric_name):
+        groups = available_metrics()
+        for unit, series in groups.items():
+            for name, _v, _l in series:
+                if name == metric_name:
+                    return unit
+        return '—'
 
-            # Log Table
-            elif widget['type'] == 'Log Table':
-                with ui.column().classes('w-full gap-0.5 max-h-32 overflow-y-auto'):
-                    for ts, line, ltype in terminal_state.get('lines', [])[-5:]:
-                        color = {'error': '#ef4444', 'warn': '#eab308', 'metric': '#5c8af0', 'json': '#22c55e'}.get(ltype, '#e4e4e7')
-                        ui.label(f"[{ts}] {line[:50]}").classes('text-xs font-mono').style(f'color: {color}')
-
-    # Background update loop
+    # ── Background update ────────────────────────────────────────────────
     async def dashboard_refresh_loop():
         while True:
             await asyncio.sleep(2)
-            # Update chart histories
-            latest = telemetry_engine.get_latest_values(selected_device.id)
-            for widget in dashboard_state['widgets']:
-                if widget['type'] == 'Line Chart' and widget['metric'] in latest:
-                    widget['history'].append(latest[widget['metric']])
-                    if len(widget['history']) > 100:
-                        widget['history'] = widget['history'][-100:]
-            refresh_dashboard()
+            try:
+                latest = telemetry_engine.get_latest_values(selected_device.id)
+                for widget in dashboard_state['widgets']:
+                    if widget['metric'] in latest:
+                        widget['history'].append(latest[widget['metric']])
+                        del widget['history'][:-100]
+                refresh_dashboard()
+            except Exception:
+                # A dead refresh loop leaves a frozen chart that looks live,
+                # which is worse than an error the user can see.
+                logger.exception('charts refresh loop failed')
+                ui.notify('Chart refresh failed', type='negative')
+                return
 
     asyncio.create_task(dashboard_refresh_loop())
     refresh_dashboard()
-
 
 def alerts_page():
 
@@ -2292,6 +2475,37 @@ def _demo_device():
     )
 
 
+# Seed telemetry for the preview device, spanning several units so the
+# unit-grouping on the Charts screen is visible without real hardware. Includes
+# a negative value and a large one, because _fmt() and the sparkline ramp have
+# to hold up for those.
+_DEMO_LINES = [
+    'TEMP:23.4', 'TEMP:23.9', 'TEMP:24.6', 'TEMP:24.1', 'TEMP:23.8', 'TEMP:24.9',
+    'HUMIDITY:58', 'HUMIDITY:59', 'HUMIDITY:61', 'HUMIDITY:60',
+    'VOLTAGE:3.28', 'VOLTAGE:3.31', 'VOLTAGE:3.29',
+    'CURRENT:0.11', 'CURRENT:0.14', 'CURRENT:0.12',
+    'RSSI:-58', 'RSSI:-61', 'RSSI:-59', 'RSSI:-72',
+    'ERROR: sensor timeout on channel 2',
+]
+
+
+def _seed_demo_telemetry():
+    """Feed the preview device one round of demo telemetry.
+
+    Idempotent, and scheduled rather than awaited: the page builder is sync and
+    process_line is async, so this runs as a task and the Charts screen fills in
+    on its first 2s refresh.
+    """
+
+    async def feed():
+        for line in _DEMO_LINES:
+            await telemetry_engine.process_line('demo-device', 'demo-session', line)
+
+    if telemetry_engine.get_all_metrics('demo-device'):
+        return
+    asyncio.create_task(feed())
+
+
 @ui.page('/')
 @ui.page('/smoke/{tab}')
 def main_page(tab: str = 'devices', with_device: bool = False):
@@ -2314,6 +2528,7 @@ def main_page(tab: str = 'devices', with_device: bool = False):
 
     if with_device and selected_device is None:
         selected_device = _demo_device()
+        _seed_demo_telemetry()
 
     # v2 design system: tokens + Inter/JetBrains Mono. Must run before any
     # screen is built so the first paint is already themed.

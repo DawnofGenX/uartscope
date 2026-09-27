@@ -405,6 +405,31 @@ body, .q-body {{
 .us-input.q-field--focused .q-field__control:after {{ border-color:{ACCENT['text']} !important; }}
 .us-input.q-field--focused .q-field__label {{ color:{ACCENT['text']} !important; }}
 
+/* ── Charts / telemetry ─────────────────────────────────────────────────── */
+.us-metric {{ font-size:24px; font-weight:{weight['medium']}; letter-spacing:-0.01em; }}
+/* A metric's latest value. Denser than us-card: this is read in a grid, and
+   the unit is a separate token so the number stays scannable. */
+.us-metric-pill {{
+  background:{SURFACE['panel']}; border:1px solid {SURFACE['line']};
+  border-radius:{r['md']}; padding:{sp['2']} {sp['3']};
+  min-width:132px; gap:2px;
+}}
+/* Block sparkline. A sparkline is a shape, not a value: it gets a muted ink so
+   it never competes with the number it is summarising. */
+.us-spark {{
+  font-family:{TYPE['mono']}; font-size:15px; line-height:1;
+  color:{ACCENT['text']}; letter-spacing:0.5px; white-space:pre;
+  flex:0 0 auto;
+}}
+/* Direction glyph. Always paired with a word in the pill, never colour alone. */
+.us-trend {{ font-size:15px; line-height:1; flex:0 0 auto; }}
+/* Unit group headings. A unit symbol is NOT a word and must never be
+   uppercased or otherwise transformed: "dBm" uppercased reads as a different
+   quantity to anyone who knows the notation, and "°C" loses its meaning. The
+   text is emitted verbatim and only spaced and weighted. */
+.us-unit {{ color:{TEXT['muted']}; font-size:{TYPE['scale']['micro']}px;
+  letter-spacing:0.04em; text-transform:none; font-weight:{weight['medium']}; }}
+
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .us-btn {{
   display:inline-flex; align-items:center; gap:{sp['2']};
