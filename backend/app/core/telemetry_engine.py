@@ -117,7 +117,13 @@ class TelemetryEngine:
                     metric = Metric(
                         name=name,
                         value=value,
-                        unit=unit if unit else None,
+                        # The pattern captures a trailing unit when the line
+                        # carries one ("TEMP:23.4C"), but the far more common
+                        # bare form ("TEMP:23.4") leaves it empty. Falling back
+                        # to name inference here is what makes units available
+                        # at all; without it every metric from this path reports
+                        # unit=None and the UI has nothing to group axes by.
+                        unit=(unit or None) or self._infer_unit(name),
                         timestamp=msg.timestamp,
                     )
                     msg.metrics.append(metric)
