@@ -41,6 +41,31 @@ selected_session = None
 current_tab = 'devices'
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+def _notify(client, message, type='info', timeout=None):
+    """Show a notification from a context that has no NiceGUI slot.
+
+    `ui.notify()` reads the client out of NiceGUI's context, which only works
+    while a page is being built. Anything running later — a background
+    asyncio task, a callback, a timer — has an empty slot stack, and calling
+    `ui.notify()` there raises RuntimeError before the message is ever sent.
+
+    That failure is silent by nature: the RuntimeError is raised inside the
+    caller's `except` block or swallowed by the task, so the notification
+    simply does not appear. Passing the client captured at build time pushes
+    the message directly to the browser, so a genuine error report actually
+    reaches the user instead of vanishing.
+
+    Falls back to the logger if the client is gone (e.g. the socket closed),
+    so a notification path can never take down the loop that called it.
+    """
+    try:
+        options = {'message': str(message), 'type': type, 'position': 'bottom'}
+        if timeout is not None:
+            options['timeout'] = timeout
+        client.outbox.enqueue_message('notify', options, client.id)
+    except Exception as exc:                    # noqa: BLE001 - last resort
+        logger.warning("could not deliver notification %r: %s", message, exc)
+
 def format_bytes(b):
     if b < 1024: return f"{b} B"
     if b < 1024*1024: return f"{b/1024:.1f} KB"
@@ -721,16 +746,21 @@ def terminal_page():
             0, {'cmd': cmd, 'timestamp': datetime.utcnow().strftime('%H:%M:%S')})
         del command_history[100:]
 
+        # Captured here, while the page is being built. The task below runs with
+        # no slot, where ui.notify() raises RuntimeError and the user is never
+        # told whether their command actually went out.
+        client = ui.context.client
+
         async def _send():
             device = device_manager.get_device(selected_device.id)
             if device and device.serial_conn:
                 try:
                     device.serial_conn.write((cmd + '\n').encode())
-                    ui.notify(f"Sent: {cmd}", type='positive', timeout=2000)
+                    _notify(client, f"Sent: {cmd}", type='positive', timeout=2000)
                 except Exception as e:
-                    ui.notify(f"Send failed: {e}", type='negative')
+                    _notify(client, f"Send failed: {e}", type='negative')
             else:
-                ui.notify("Device not connected", type='warning')
+                _notify(client, "Device not connected", type='warning')
         asyncio.create_task(_send())
         cmd_input.value = ''
 
@@ -1060,18 +1090,39 @@ def terminal_page():
             return
         queue = asyncio.Queue()
 
+        # ui.notify() resolves the client through NiceGUI's context, and a bare
+        # asyncio task has no slot, so calling it from here raises RuntimeError
+        # and the message never reaches anyone. Capture the client while the
+        # page is still being built, where there IS a slot, and push straight
+        # to it afterwards.
+        client = ui.context.client
+
         async def on_data(line=""):
             await queue.put(line)
 
         try:
             await serial_reader.start_device(selected_device, "terminal", on_data)
         except Exception as e:
-            ui.notify(f"Could not attach to the stream: {e}", type='negative')
+            _notify(client, f"Could not attach to the stream: {e}", type='negative')
             return
 
         try:
             while True:
-                line = await asyncio.wait_for(queue.get(), timeout=1)
+                # An expired wait means the device had nothing to say for a
+                # second. That is the normal state of a sensor that reports
+                # every few seconds, so it must NOT end the loop.
+                #
+                # This used to be `except Exception` around the whole while,
+                # and asyncio.TimeoutError is a subclass of Exception. A quiet
+                # device therefore killed its own stream, and because the
+                # handler then called ui.notify() from a slot-less task, the
+                # RuntimeError that followed was swallowed too. A working board
+                # that simply had nothing to report looked exactly like a dead
+                # one, with no message at all.
+                try:
+                    line = await asyncio.wait_for(queue.get(), timeout=1)
+                except asyncio.TimeoutError:
+                    continue
                 terminal_state['lines'].append((
                     datetime.utcnow().strftime('%H:%M:%S'), line, _classify(line)))
                 # Keep the buffer bounded; the painted window is capped anyway.
@@ -1082,10 +1133,10 @@ def terminal_page():
         except Exception:
             # A read loop that dies silently looks identical to a device that
             # stopped talking, which is the single most confusing failure a
-            # serial tool can have.
+            # serial tool can have. This arm is now for real faults only.
             logger.exception("terminal stream loop for %s failed",
                              selected_device.id)
-            ui.notify("Stream stopped unexpectedly", type='negative')
+            _notify(client, "Stream stopped unexpectedly", type='negative')
 
     asyncio.create_task(stream_loop())
 
@@ -1431,6 +1482,10 @@ def charts_page():
 
     # ── Background update ────────────────────────────────────────────────
     async def dashboard_refresh_loop():
+        # Captured while the page is being built. The loop runs detached, so
+        # ui.notify() below would raise RuntimeError and the user would get a
+        # frozen chart with no explanation.
+        client = ui.context.client
         while True:
             await asyncio.sleep(2)
             try:
@@ -1444,7 +1499,7 @@ def charts_page():
                 # A dead refresh loop leaves a frozen chart that looks live,
                 # which is worse than an error the user can see.
                 logger.exception('charts refresh loop failed')
-                ui.notify('Chart refresh failed', type='negative')
+                _notify(client, 'Chart refresh failed', type='negative')
                 return
 
     asyncio.create_task(dashboard_refresh_loop())
@@ -1761,6 +1816,10 @@ def alerts_page():
     # their cursor.
     async def check_new_alerts():
         last = len(get_alert_events())
+        # Detached task: no slot, so ui.notify() would raise and the RuntimeError
+        # would be swallowed. Every alert would fire silently, which is the one
+        # outcome this screen cannot have. Client captured at build time.
+        client = ui.context.client
         while True:
             await asyncio.sleep(2)
             try:
@@ -1772,7 +1831,7 @@ def alerts_page():
                 for a in current[last:]:
                     if not a.get('acknowledged'):
                         token = severity_token(a.get('severity'))
-                        ui.notify(a.get('message') or 'Alert', type=(
+                        _notify(client, a.get('message') or 'Alert', type=(
                             'negative' if token == 'error'
                             else 'warning' if token == 'warn' else 'info'),
                             timeout=6000)
@@ -3466,9 +3525,17 @@ def main_page(tab: str = 'devices', with_device: bool = False):
 
     asyncio.create_task(bg_refresh())
 
-    # Alert notifications
+    # Alert notifications.
+    #
+    # The alert engine calls this from its own background loop, not from a page
+    # build, so there is no slot and ui.notify() would raise. The user would
+    # never see the alert -- and an alert that fires silently is the one failure
+    # this whole screen exists to prevent. Push to the client captured here.
+    _client = ui.context.client
+
     async def on_alert(alert):
-        ui.notify(f"🚨 {alert.get('message', '')}", type='warning', timeout=5000)
+        _notify(_client, f"🚨 {alert.get('message', '')}",
+                type='warning', timeout=5000)
 
     alert_engine.register_callback(on_alert)
 
