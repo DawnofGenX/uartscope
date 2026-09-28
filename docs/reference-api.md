@@ -335,7 +335,7 @@ Broadcast frames carry `type` of `telemetry`, `packet`, `alert`, or
 **GET `/api/health`** — liveness plus device/session/WS counters:
 
 ```json
-{"status": "healthy", "version": "2.0.0",
+{"status": "healthy", "version": "2.0.1",
  "devices": {"total": 0, "connected": 0, "streaming": 0, "errors": 0,
              "total_bytes_received": 0, "total_packets": 0},
  "active_sessions": 0, "websocket_clients": 0}

@@ -5,9 +5,41 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.1] — 2026-09-28
+
+A quiet device no longer kills its own stream, and four other notifications that
+had been failing silently are now visible. The README is replaced and a
+documentation tree is added.
 
 ### Fixed
+
+- **A device with nothing to say killed the Terminal stream.** The read loop
+  used a 1-second timeout inside a `try` whose handler caught `Exception`, and
+  `asyncio.TimeoutError` is a subclass of `Exception`. A board that reported
+  every few seconds — or only spoke when asked — tripped that arm, the
+  `while True` never iterated again, and the stream was gone. The handler then
+  called `ui.notify()` from a bare `asyncio` task, where NiceGUI has no slot, so
+  that raised `RuntimeError` too and the message never reached the browser. A
+  healthy board that merely had nothing to report looked exactly like a dead
+  one, with no message at all. An expired read timeout is now normal, so the arm
+  that reports failures only handles real faults.
+- **Every alert notification was being dropped.** `check_new_alerts()` on the
+  Alerts screen and `on_alert()` on the main page both called `ui.notify()`
+  from a context with no NiceGUI slot, so each raised `RuntimeError` before the
+  message was sent. An alert that fires silently is the one outcome that screen
+  exists to prevent, and it was the guaranteed one. Both now push to the client
+  captured at page-build time. Note that the alert *engine* was always correct;
+  only the display path was broken.
+- **A failed charts refresh would have frozen the screen silently.** The same
+  slot problem: the loop's error handler could not raise a visible error, so a
+  dead refresh loop would leave a chart that looks live. The code's own comment
+  called this worse than a visible error, and it was the likelier outcome.
+- **Sending a command gave no confirmation.** The send path reported success,
+  failure, and "device not connected" through the same broken mechanism, so a
+  command that never left the box looked identical to one that did.
+
+Event-handler notifications were not affected: those run with a slot and were
+never broken.
 
 - **The product could not be imported after a documented install.** `nicegui`
   was absent from every Python manifest — `backend/requirements.txt` and
@@ -20,6 +52,45 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   package separately, and the Windows release job likewise had a bare
   `pip install nicegui` alongside the manifest. It is now a declared
   dependency, and the redundant line in the release workflow has been dropped.
+- **The API test suite only passed because of a stray local database.** Tests
+  that hit a route which touches the database passed on a developer's machine
+  because a real `uartscope.db` was sitting in the working tree. In a clean
+  checkout they failed. The suite no longer depends on ambient state.
+- **The screen-build CI step probed a port with nothing listening.** It checked
+  a port before the app had bound it, so it could not detect a genuinely broken
+  screen build.
+
+### Added
+
+- **Documentation.** The README is replaced, and `docs/` adds a documentation
+  tree: a tutorial, five how-to guides, API / configuration / protocol
+  references, and architecture and screen explanations, with screenshots of the
+  running app.
+
+  Every claim in the old README was checked against the code and against a
+  running instance, and several were wrong. Corrected here, because a user
+  following them would have been stuck: the quick start told you to run uvicorn
+  and then the desktop app in a second terminal, but `desktop_app.py` imports
+  the backend modules in-process and never calls the backend over HTTP, so
+  uvicorn is not part of local use at all; `/api/devices/{id}/start` and `/stop`
+  do not exist (the real verbs are `/connect` and `/disconnect`, and the
+  documented `/stop` belongs to a different router that matched the path by
+  accident); `/api/devices/{id}/stats` does not exist either; the documented
+  register example was malformed JSON; baudrate auto-detection is claimed as a
+  feature but no such code exists; sessions are not created automatically when
+  streaming starts; the plugin marketplace is a hardcoded list, not a registry;
+  and the architecture tree described a `storage/` package that does not exist.
+
+  The README now also states which features are mocks and which screens are
+  still pre-v2, so they are not discovered by surprise.
+
+### Verification
+
+- 75 tests pass, plus 4 new for the stream fix — 79 total. The new tests were
+  each confirmed to fail against the code they guard against.
+- All 13 screen builds serve cleanly over real HTTP.
+- Ruff clean; all three static gates pass.
+- Every endpoint in the API reference was exercised against a live instance.
 
 ## [2.0.0] — 2026-09-27
 
@@ -135,5 +206,6 @@ about what has been redesigned.
 - No tracebacks in the application log across a full pass of every screen.
 - The React frontend in `frontend/` is unchanged and out of scope for v2.
 
+[2.0.1]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.0.1
 [2.0.0]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.0.0
-[Unreleased]: https://github.com/DawnofGenX/uartscope/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/DawnofGenX/uartscope/compare/v2.0.1...HEAD

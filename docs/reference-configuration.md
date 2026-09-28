@@ -10,7 +10,7 @@ as `UARTSCOPE_` + the upper-cased field name — `database_url` becomes
 | Setting | Env var | Default | What it changes |
 |---|---|---|---|
 | `app_name` | `UARTSCOPE_APP_NAME` | `UARTScope Pro` | App name string |
-| `app_version` | `UARTSCOPE_APP_VERSION` | `2.0.0` | Version reported by `GET /api/health` |
+| `app_version` | `UARTSCOPE_APP_VERSION` | `2.0.1` | Version reported by `GET /api/health` |
 | `debug` | `UARTSCOPE_DEBUG` | `false` | Debug mode |
 | `host` | `UARTSCOPE_HOST` | `0.0.0.0` | Bind address of the uvicorn backend |
 | `port` | `UARTSCOPE_PORT` | `8080` | Listen port of the uvicorn backend |
