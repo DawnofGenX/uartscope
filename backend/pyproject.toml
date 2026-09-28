@@ -19,6 +19,9 @@ dependencies = [
     "httpx>=0.27.0",
     "python-multipart>=0.0.12",
     "paho-mqtt>=2.1.0",
+    # The desktop app (desktop_app.py) is built on NiceGUI. It was absent from
+    # every manifest, so the main product could not be imported after install.
+    "nicegui>=3.17.0",
     "aiomqtt>=2.3.0",
 ]
 

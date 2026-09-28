@@ -5,6 +5,22 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The product could not be imported after a documented install.** `nicegui`
+  was absent from every Python manifest — `backend/requirements.txt` and
+  `backend/pyproject.toml` both. The desktop app (`desktop_app.py`) is built on
+  NiceGUI, so `pip install -r requirements.txt` followed by `import desktop_app`
+  failed with `ModuleNotFoundError: No module named 'nicegui'`, and the CI
+  screen-build step failed on every Python version. No other declared
+  dependency pulls NiceGUI in transitively, so the gap could not be papered
+  over: `Dockerfile.desktop` happened to work only because it installed the
+  package separately, and the Windows release job likewise had a bare
+  `pip install nicegui` alongside the manifest. It is now a declared
+  dependency, and the redundant line in the release workflow has been dropped.
+
 ## [2.0.0] — 2026-09-27
 
 The desktop app (NiceGUI) is redesigned end to end. The v2 pass found and fixed

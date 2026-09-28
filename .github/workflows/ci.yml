@@ -93,7 +93,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           cd backend; pip install -r requirements.txt
-          pip install pyinstaller nicegui
+          # nicegui used to be pinned here because the manifests omitted it; it
+          # is a declared dependency now. pyinstaller is build-only and stays.
+          pip install pyinstaller
 
       - name: Build Windows executable
         run: |
