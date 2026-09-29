@@ -1143,6 +1143,40 @@ def terminal_page():
 
     asyncio.create_task(stream_loop())
 
+def _sparkline(values, unit):
+    """A 20-sample block sparkline. Colour is the series' unit group, so a
+    glance distinguishes temperature from signal strength.
+
+    Module scope rather than nested in charts_page: Charts, Performance and
+    MQTT all render these, and a per-screen copy is how a formatting idiom
+    drifts apart.
+    """
+    vals = values[-20:]
+    if len(vals) < 2:
+        return ''
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1.0
+    ramp = ' ▁▂▃▄▅▆▇█'
+    return ''.join(
+        ramp[min(int(((v - lo) / rng) * 8), 8)] for v in vals)
+
+
+def _trend(values):
+    """Direction of travel, as a word plus a glyph -- never colour alone.
+
+    Module scope; see _sparkline.
+    """
+    if len(values) < 2:
+        return None
+    delta = values[-1] - values[-2]
+    if abs(delta) < 1e-9:
+        return ('flat', '→', 'steady')
+    rel = abs(delta) / (abs(values[-2]) or 1.0)
+    if rel < 0.01:
+        return ('flat', '→', 'steady')
+    return ('up', '↑', 'rising') if delta > 0 else ('down', '↓', 'falling')
+
+
 def charts_page():
     """Charts: the Monitor surface.
 
@@ -1223,30 +1257,6 @@ def charts_page():
         if av >= 1:
             return f'{v:.2f}'
         return f'{v:.3f}'
-
-    def _sparkline(values, unit):
-        """A 20-sample block sparkline. Colour is the series' unit group, so a
-        glance distinguishes temperature from signal strength."""
-        vals = values[-20:]
-        if len(vals) < 2:
-            return ''
-        lo, hi = min(vals), max(vals)
-        rng = (hi - lo) or 1.0
-        ramp = ' ▁▂▃▄▅▆▇█'
-        return ''.join(
-            ramp[min(int(((v - lo) / rng) * 8), 8)] for v in vals)
-
-    def _trend(values):
-        """Direction of travel, as a word plus a glyph -- never colour alone."""
-        if len(values) < 2:
-            return None
-        delta = values[-1] - values[-2]
-        if abs(delta) < 1e-9:
-            return ('flat', '→', 'steady')
-        rel = abs(delta) / (abs(values[-2]) or 1.0)
-        if rel < 0.01:
-            return ('flat', '→', 'steady')
-        return ('up', '↑', 'rising') if delta > 0 else ('down', '↓', 'falling')
 
     # ── UI ───────────────────────────────────────────────────────────────
     with ui.column().classes('w-full gap-4'):
