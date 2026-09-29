@@ -359,7 +359,21 @@ class CANDecoder(ProtocolDecoder):
         return result
 
     def encode(self, data: Dict[str, Any]) -> bytes:
-        can_id = int(data.get("can_id", "0x100"), 16)
+        """Encode a CAN frame from a 16-bit id and its data bytes.
+
+        `can_id` may arrive as a hex string ("0x100"), a decimal string
+        ("256") or an int (256) -- JSON callers send all three, and
+        POST /api/protocols/encode hands the body through untouched. Parsing
+        the value with a base of 16 unconditionally meant an int raised
+        `TypeError: int() can't convert non-string with explicit base` and the
+        request returned HTTP 500, so the most natural JSON input was the one
+        that failed.
+        """
+        raw_id = data.get("can_id", "0x100")
+        if isinstance(raw_id, str):
+            can_id = int(raw_id, 16) if not raw_id.isdigit() else int(raw_id)
+        else:
+            can_id = int(raw_id)
         dlc = data.get("dlc", len(data.get("data_bytes", [])))
         data_bytes = data.get("data_bytes", [0] * dlc)
         return bytes([(can_id >> 8) & 0xFF, can_id & 0xFF, dlc]) + bytes(data_bytes[:8])
@@ -660,10 +674,18 @@ class DBCDecoder(ProtocolDecoder):
         return 0
 
     def encode(self, data: Dict[str, Any]) -> bytes:
-        """Encode a CAN frame from structured data."""
-        can_id = data.get('can_id', 0)
-        if isinstance(can_id, str):
-            can_id = int(can_id, 16)
+        """Encode a CAN frame from structured data.
+
+        `can_id` may arrive as a hex string ("0x100"), a decimal string ("256")
+        or an int (256) -- JSON callers send all three, and the API route hands
+        the body through untouched. An earlier guard only handled the string
+        form, so an int id reached int(can_id, 16) and raised.
+        """
+        raw_id = data.get('can_id', 0)
+        if isinstance(raw_id, str):
+            can_id = int(raw_id, 16) if not raw_id.isdigit() else int(raw_id)
+        else:
+            can_id = int(raw_id)
 
         # Build CAN data bytes from signals
         data_bytes = bytearray(8)
