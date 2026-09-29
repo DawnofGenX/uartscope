@@ -25,7 +25,7 @@ Node.js, no build step, no browser install.
 | Sessions | Record, replay, diff against a golden baseline, and export JSON/CSV; share as `.uartscope` bundles from the desktop app |
 | Protocol decoders | Six built-ins — UART Text, Modbus RTU, I2C, SPI, CAN Bus, CAN DBC — all with encode as well as decode |
 | MQTT | Multi-broker profiles, pub/sub, message history (backend API is live; the MQTT screen is still on the v1 UI — see below) |
-| REST + WebSocket API | FastAPI backend on :8080 with ~50 verified routes; see [API reference](docs/reference-api.md) |
+| REST + WebSocket API | FastAPI backend on :8080 with ~50 verified routes; the OpenAPI schema at `/docs` lists them all |
 
 ### What to know before you trust the screenshots
 
@@ -67,8 +67,8 @@ Connect UARTScope to: /dev/pts/5
 ```
 
 Add the printed `/dev/pts/…` port as a device in the UI, press **Start**, and
-watch live charts. The [tutorial](docs/tutorial-first-capture.md) walks through
-this end to end.
+watch live charts. The steps above are the whole path; the removed tutorial
+walked through the same thing in more detail.
 
 ### Backend API only
 
@@ -94,17 +94,15 @@ service on :8080, while the UI is served on :3000.
 
 ## Documentation
 
-| If you want to… | Read |
-|---|---|
-| Get your first capture working | [Tutorial: your first capture](docs/tutorial-first-capture.md) |
-| Fix "my board isn't showing up" | [How to connect a board](docs/how-to-connect-a-board.md) |
-| Get paged when a value crosses a limit | [How to set up alerts](docs/how-to-alerts.md) |
-| Record, replay, and export sessions | [How to use sessions and export](docs/how-to-sessions-and-export.md) |
-| Decode raw bus traffic | [How to decode protocols](docs/how-to-decode-protocols.md) |
-| Look up endpoints, config, or protocols | Reference: [API](docs/reference-api.md) · [configuration](docs/reference-configuration.md) · [protocols](docs/reference-protocols.md) |
-| Understand how it works | Explanation: [architecture](docs/explanation-architecture.md) · [screens](docs/explanation-screens.md) |
+The long-form guides have been removed. What remains here:
 
-Full docs index: [docs/index.md](docs/index.md).
+- **Quick start** (above) — the five-minute setup, including the no-hardware path
+- **What to know before you trust the screenshots** (above) — which features
+  are real and which are still pre-v2
+- **Development** (below) — running the tests and the static gates
+
+The full guides are recoverable from the v2.0.1 tag if you want them:
+https://github.com/DawnofGenX/uartscope/tree/v2.0.1/docs
 
 ## Development
 

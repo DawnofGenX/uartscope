@@ -5,6 +5,22 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **The long-form documentation tree.** `docs/` loses its twelve markdown files:
+  the tutorial, five how-to guides, three reference documents, two
+  explanations, and the screenshot notes. The guides were written for v2.0.1 and
+  verified against that release; they are recoverable from the `v2.0.1` tag if
+  they are wanted back. The eleven screenshots in `docs/images/` are kept, and
+  the README's link to them still works.
+
+  The README pointed at nine of these files. Rather than leave every one a 404,
+  its Documentation section now says what remains in the README and where the
+  rest can be found. `CHANGELOG.md`, `README.md` and `backend/README.md` are
+  unaffected.
+
 ## [2.0.1] — 2026-09-28
 
 A quiet device no longer kills its own stream, and four other notifications that
