@@ -2469,125 +2469,354 @@ def _goto_sessions():
     rebuild()
 
 def performance_page():
-    """Performance Analytics - packet rate, throughput, latency, errors, uptime."""
+    """Performance: throughput, latency and errors over time.
+
+    v1 showed a snapshot, a per-device table, and a text histogram of the raw
+    latency samples. It never called `get_history()`, so the tracker kept a
+    full hour of packet-rate, throughput and latency snapshots that nothing
+    displayed. It also rebuilt the entire page every 3 seconds without clearing
+    the container, so the page grew without bound for as long as it was open.
+
+    v2 answers the three questions this screen exists to answer:
+
+      * Is it moving, and which way?      -- tiles carry a sparkline and a trend
+      * What did it look like, recently?  -- a selectable time window over the
+                                            tracker's real history
+      * Which device is responsible?      -- per-device rows, last
+
+    The window selector is honest about resolution: the tracker's own cadence
+    is 5s, so 1m is 12 points, 5m is 60, 15m is 180, and the block ramp has
+    nine levels. Past 15m the ramp flattens, so the caption says how many
+    points are actually on screen rather than implying more resolution than
+    the data has.
+    """
+    # Windows are (label, seconds). None means "everything the tracker holds".
+    WINDOWS = [('1m', 60), ('5m', 300), ('15m', 900), ('All', None)]
+    SNAPSHOT_INTERVAL = 5.0        # the tracker's own cadence
+    state = {'window': '5m'}
+
+    def _window_points():
+        """How many samples the selected window covers, and what is available."""
+        for label, secs in WINDOWS:
+            if label == state['window']:
+                want = None if secs is None else int(secs / SNAPSHOT_INTERVAL)
+                break
+        return want
+
+    def _history_for_window():
+        """The selected window's history, oldest first.
+
+        Sliced by age rather than by count so the window means the same thing
+        regardless of how densely the tracker happened to sample.
+        """
+        history = performance_tracker.get_history()
+        if not history:
+            return [], 0
+        want = _window_points()
+        if want is None:
+            return history, len(history)
+        return history[-want:], min(want, len(history))
+
+    def _fmt_count(n):
+        return f'{n:,}'
+
+    def _fmt_rate(series):
+        """Packet-rate span, so an axis is labelled with its own range."""
+        if not series:
+            return ''
+        lo, hi = min(series), max(series)
+        if hi - lo < 1:
+            return f'{lo:.0f} pps'
+        return f'{lo:.0f}–{hi:.0f} pps'
+
+    def _percentile(values, pct):
+        """Nearest-rank percentile.
+
+        Honest about its sample count at this size: the tracker keeps 100
+        latency samples per device, so p99 of 100 samples is the 99th value,
+        not a stable estimate. The caption says so rather than presenting it as
+        authoritative.
+        """
+        if not values:
+            return None
+        ordered = sorted(values)
+        idx = min(len(ordered) - 1, max(0, int(round(pct / 100.0 * len(ordered))) - 1))
+        return ordered[idx]
+
+    def _histogram(values, height=90):
+        """A block histogram with p50/p95/p99 marked.
+
+        v1 drew ten buckets of `█` glyphs with no scale and no markers. The
+        markers are what make a latency distribution diagnostic: p95 is the
+        number people actually alert on.
+        """
+        if not values:
+            return None
+        lo, hi = min(values), max(values)
+        if hi <= lo:
+            hi = lo + 1.0
+        buckets = 24
+        width = (hi - lo) / buckets
+        counts = [0] * buckets
+        for v in values:
+            counts[min(int((v - lo) / width), buckets - 1)] += 1
+        peak = max(counts) or 1
+        ramp = ' ▁▂▃▄▅▆▇█'
+        marks = {}
+        for pct in (50, 95, 99):
+            p = _percentile(values, pct)
+            if p is not None:
+                marks[min(int((p - lo) / width), buckets - 1)] = pct
+        cells = []
+        for i, count in enumerate(counts):
+            level = int((count / peak) * 8)
+            glyph = ramp[min(level + 1, 8)] if count else ' '
+            if i in marks:
+                glyph = f'{glyph}│'
+            cells.append(glyph)
+        return {
+            'row': ''.join(cells),
+            'lo': lo,
+            'hi': hi,
+            'marks': marks,
+            'n': len(values),
+            'height': height,
+        }
+
+    performance_container = ui.column().classes('w-full gap-5')
+
     def refresh_performance():
+        # clear() leaves the ambient context on a deleted slot, so the rebuild
+        # must re-enter explicitly. Every v2 screen does this; v1 did not, and
+        # the page grew without bound.
+        performance_container.clear()
+
         summary = performance_tracker.get_summary()
         snapshot = performance_tracker.get_global_snapshot()
         all_perf = performance_tracker.get_all_perf()
+        history, available = _history_for_window()
+        full_history = performance_tracker.get_history()
 
-        # Main stats row
-        with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val, color in [
-                ('Current PPS', f"{snapshot.get('current_packet_rate', 0):.1f}", '#5c8af0'),
-                ('Throughput', format_bytes(snapshot.get('current_throughput', 0)) + '/s', '#22c55e'),
-                ('Avg Latency', f"{snapshot.get('avg_latency_ms', 0):.1f} ms", '#eab308'),
-                ('Total Errors', str(summary.get('total_errors', 0)), '#ef4444'),
-                ('Error Rate', f"{summary.get('error_rate_per_min', 0):.1f}/min", '#ef4444'),
-            ]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(str(val)).classes('text-lg font-medium font-mono').style(f'color: {color}')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
+        pps_series = [s.get('current_packet_rate', 0) for s in history]
+        tput_series = [s.get('current_throughput', 0) for s in history]
+        lat_series = [s.get('avg_latency_ms', 0) for s in history]
+        all_latencies = [lat for p in all_perf.values() for lat in p.latencies]
 
-        # Aggregate totals
-        with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val in [
-                ('Total Packets', f"{summary.get('total_packets', 0):,}"),
-                ('Total Data', format_bytes(summary.get('total_bytes', 0))),
-                ('Avg PPS', f"{summary.get('avg_packet_rate', 0):.1f}"),
-                ('Avg Throughput', format_bytes(summary.get('avg_throughput', 0)) + '/s'),
-                ('Uptime', format_duration(None, None, seconds=summary.get('total_uptime_seconds', 0))),
-            ]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(str(val)).classes('text-lg font-medium text-white font-mono')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
+        with performance_container:
+            with ui.row().classes('w-full items-center justify-between'):
+                with ui.column().classes('gap-1'):
+                    ui.label('Performance').classes('us-title')
+                    ui.label('Throughput, latency and errors over time').classes(
+                        'us-caption us-muted')
+                with ui.row().classes('items-center gap-3'):
+                    ui.label('Window').classes('us-label us-muted')
+                    window_select = ui.select(
+                        {label: label for label, _ in WINDOWS},
+                        value=state['window'],
+                        on_change=lambda e: _set_window(e.value),
+                    ).props('dense outlined options-dense').classes('w-[110px]')
+                    ui.label('Updates every 3s').classes('us-micro us-muted')
 
-        # Per-device performance table
-        with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            ui.label('Per-Device Performance').classes('text-white font-medium mb-3')
+            # ── Stat tiles ──────────────────────────────────────────────
+            # Each tile carries the sparkline for its own series, so the row
+            # answers "is it moving" without a chart.
+            with ui.row().classes('w-full gap-3 flex-wrap'):
+                tiles = [
+                    ('Packet rate', f"{snapshot.get('current_packet_rate', 0):.1f}",
+                     'pps', pps_series),
+                    ('Throughput',
+                     format_bytes(snapshot.get('current_throughput', 0)), '/s',
+                     tput_series),
+                    ('Avg latency',
+                     f"{snapshot.get('avg_latency_ms', 0):.1f}", 'ms',
+                     lat_series),
+                    ('Total errors', _fmt_count(summary.get('total_errors', 0)),
+                     '', []),
+                    ('Error rate', f"{summary.get('error_rate_per_min', 0):.1f}",
+                     '/min', []),
+                ]
+                for label, value, unit, series in tiles:
+                    with ui.column().classes('us-card flex-1 gap-1 min-w-[150px] !p-4'):
+                        ui.label(label).classes('us-label us-muted')
+                        with ui.row().classes('items-baseline gap-1'):
+                            ui.label(value).classes('us-metric us-mono')
+                            if unit:
+                                ui.label(unit).classes('us-unit')
+                        if series:
+                            ui.label(_sparkline(series, label)).classes('us-spark')
+                            trend = _trend(series)
+                            if trend:
+                                ui.label(trend[1]).classes('us-trend').style(
+                                    f'color:{_trend_colour(trend[0])}')
+                                ui.label(trend[2]).classes('us-micro us-muted')
+                        else:
+                            # Errors have no history series of their own, so
+                            # say that rather than drawing a flat line that
+                            # looks like data.
+                            ui.label('no series').classes('us-micro us-muted')
 
-            if not all_perf:
-                ui.label('No device data yet').classes('text-[#52525b] text-sm py-4')
-            else:
-                # Table
-                with ui.table({
-                    'columns': [
-                        {'name': 'device', 'label': 'Device', 'field': 'name', 'align': 'left', 'classes': 'text-[#71717a] text-xs'},
-                        {'name': 'status', 'label': 'Status', 'field': 'status', 'align': 'left'},
-                        {'name': 'uptime', 'label': 'Uptime', 'field': 'uptime', 'align': 'right'},
-                        {'name': 'packets', 'label': 'Packets', 'field': 'packets', 'align': 'right'},
-                        {'name': 'data', 'label': 'Data', 'field': 'data', 'align': 'right'},
-                        {'name': 'pps', 'label': 'PPS', 'field': 'pps', 'align': 'right'},
-                        {'name': 'throughput', 'label': 'Throughput', 'field': 'throughput', 'align': 'right'},
-                        {'name': 'latency', 'label': 'Latency', 'field': 'latency', 'align': 'right'},
-                        {'name': 'errors', 'label': 'Errors', 'field': 'errors', 'align': 'right'},
-                    ],
-                    'rows': [],
-                    'row_key': 'id',
-                }) as perf_table:
-                    rows = []
+            # ── Totals ──────────────────────────────────────────────────
+            with ui.row().classes('w-full gap-3 flex-wrap'):
+                for label, value in [
+                    ('Total packets', _fmt_count(summary.get('total_packets', 0))),
+                    ('Total data', format_bytes(summary.get('total_bytes', 0))),
+                    ('Uptime', format_duration(
+                        None, None,
+                        seconds=summary.get('total_uptime_seconds', 0))),
+                    ('Connected', f"{snapshot.get('connected_devices', 0)}"),
+                ]:
+                    with ui.column().classes('us-card flex-1 gap-1 min-w-[140px] !p-3'):
+                        ui.label(label).classes('us-label us-muted')
+                        ui.label(value).classes('us-metric us-mono')
+
+            if not full_history:
+                with ui.column().classes('us-empty w-full'):
+                    with ui.column().classes('gap-2'):
+                        ui.label('No performance data yet').classes('us-display')
+                        ui.label(
+                            'Start a device stream and this fills with packet '
+                            'rate, throughput and latency as it arrives.'
+                        ).classes('us-body')
+                return
+
+            # ── Time series ─────────────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                with ui.row().classes('w-full items-center justify-between'):
+                    ui.label('Over time').classes('us-subhead')
+                    # Say how much resolution is really on screen. The block
+                    # ramp has nine levels; past ~180 points it flattens and
+                    # the shape stops being readable.
+                    if available < (_window_points() or available):
+                        ui.label(
+                            f'{available} samples (tracker holds '
+                            f'{len(full_history)})'
+                        ).classes('us-micro us-muted')
+                    elif available > 180:
+                        ui.label(
+                            f'{available} samples — shape only at this density'
+                        ).classes('us-micro us-muted')
+                    else:
+                        ui.label(f'{available} samples').classes('us-micro us-muted')
+
+                for name, series, unit in [
+                    ('Packet rate', pps_series, 'pps'),
+                    ('Throughput', tput_series, 'bytes/s'),
+                    ('Latency', lat_series, 'ms'),
+                ]:
+                    with ui.column().classes('gap-1'):
+                        with ui.row().classes('items-baseline gap-2'):
+                            ui.label(name).classes('us-label us-muted')
+                            ui.label(_fmt_rate(series)).classes('us-micro us-muted')
+                        ui.label(_sparkline(series, name)).classes('us-spark')
+                        if series:
+                            trend = _trend(series)
+                            if trend:
+                                with ui.row().classes('items-center gap-1'):
+                                    ui.label(trend[1]).classes('us-trend').style(
+                                        f'color:{_trend_colour(trend[0])}')
+                                    ui.label(trend[2]).classes('us-micro us-muted')
+                        else:
+                            ui.label('no samples in this window').classes(
+                                'us-micro us-muted')
+
+            # ── Latency distribution ────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                with ui.row().classes('w-full items-center justify-between'):
+                    ui.label('Latency distribution').classes('us-subhead')
+                    if all_latencies:
+                        p50 = _percentile(all_latencies, 50)
+                        p95 = _percentile(all_latencies, 95)
+                        p99 = _percentile(all_latencies, 99)
+                        ui.label(
+                            f'p50 {p50:.1f}ms · p95 {p95:.1f}ms · p99 {p99:.1f}ms'
+                        ).classes('us-micro us-mono')
+                if all_latencies:
+                    hist = _histogram(all_latencies)
+                    ui.label(hist['row']).classes('us-spark')
+                    with ui.row().classes('w-full justify-between'):
+                        ui.label(f"{hist['lo']:.1f}ms").classes('us-micro us-muted')
+                        ui.label('│ marks p50, p95, p99').classes('us-micro us-muted')
+                        ui.label(f"{hist['hi']:.1f}ms").classes('us-micro us-muted')
+                    ui.label(
+                        f"{hist['n']} samples (100 per device — p99 over a "
+                        f"small sample is the 99th value, not a stable estimate)"
+                    ).classes('us-micro us-muted')
+                else:
+                    ui.label('No latency samples yet').classes('us-body us-muted')
+
+            # ── Per-device ──────────────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                ui.label('Per device').classes('us-subhead')
+                if not all_perf:
+                    ui.label('No device data yet').classes('us-body us-muted')
+                else:
                     for dev_id, p in all_perf.items():
-                        is_connected = p.connected_at and not p.disconnected_at
-                        rows.append({
-                            'id': dev_id,
-                            'name': p.device_name or dev_id,
-                            'status': '● LIVE' if is_connected else '○ OFF',
-                            'uptime': _fmt_uptime(p.uptime_seconds),
-                            'packets': f"{p.total_packets:,}",
-                            'data': format_bytes(p.total_bytes),
-                            'pps': f"{p.current_packet_rate:.1f}",
-                            'throughput': format_bytes(int(p.current_throughput)) + '/s',
-                            'latency': f"{p.avg_latency_ms:.1f}ms",
-                            'errors': str(p.error_count),
-                        })
-                    perf_table.rows = rows
-                    # Style status column
-                    perf_table.props('separator=cell')
+                        live = p.connected_at and not p.disconnected_at
+                        with ui.column().classes('us-row w-full gap-1 !py-2'):
+                            with ui.row().classes('w-full items-center gap-3'):
+                                with ui.row().classes('items-center gap-2 flex-1 min-w-0'):
+                                    ui.label(' ').classes(
+                                        f"us-dot {'us-dot-live' if live else 'us-dot-idle'}")
+                                    with ui.column().classes('gap-0 min-w-0'):
+                                        ui.label(
+                                            p.device_name or dev_id
+                                        ).classes('us-body us-truncate')
+                                        ui.label(
+                                            f"{_fmt_uptime(p.uptime_seconds)} · "
+                                            f"{_fmt_count(p.total_packets)} packets · "
+                                            f"{format_bytes(p.total_bytes)}"
+                                        ).classes('us-micro us-muted us-mono')
+                                with ui.row().classes('items-baseline gap-3'):
+                                    ui.label(
+                                        f"{p.current_packet_rate:.1f}"
+                                    ).classes('us-micro us-mono')
+                                    ui.label('pps').classes('us-micro us-muted')
+                                    ui.label(
+                                        f"{p.avg_latency_ms:.1f}"
+                                    ).classes('us-micro us-mono')
+                                    ui.label('ms').classes('us-micro us-muted')
+                                    if p.error_count:
+                                        ui.label(
+                                            f"{p.error_count} err"
+                                        ).classes('us-micro').style(
+                                            'color:var(--us-status-error,#ef4444)')
+                            if p.latencies and len(p.latencies) > 1:
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.label(_sparkline(p.latencies, 'latency')).classes(
+                                        'us-spark')
+                                    trend = _trend(p.latencies)
+                                    if trend:
+                                        ui.label(trend[1]).classes('us-trend').style(
+                                            f'color:{_trend_colour(trend[0])}')
 
-        # Latency sparkline (text-based mini chart)
-        with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            with ui.row().classes('w-full items-center justify-between mb-3'):
-                ui.label('Latency Distribution (last 100 samples)').classes('text-white font-medium')
-                ui.label(f"Avg: {summary.get('avg_latency_ms', 0):.1f}ms").classes('text-[#52525b] text-xs font-mono')
+    def _set_window(value):
+        state['window'] = value or '5m'
+        refresh_performance()
 
-            # Collect all latency samples
-            all_latencies = []
-            for p in all_perf.values():
-                all_latencies.extend(p.latencies)
+    def _trend_colour(direction):
+        """Trend colour, paired with the glyph and word elsewhere.
 
-            if all_latencies:
-                # Build histogram (10 buckets)
-                lat_max = max(all_latencies)
-                lat_min = min(all_latencies)
-                bucket_count = 10
-                bucket_width = (lat_max - lat_min) / bucket_count if lat_max > lat_min else 1
-                buckets = [0] * bucket_count
-                for lat in all_latencies:
-                    idx = min(int((lat - lat_min) / bucket_width), bucket_count - 1) if bucket_width > 0 else 0
-                    buckets[idx] += 1
-
-                max_bucket = max(buckets) if buckets else 1
-                with ui.row().classes('w-full items-end gap-1').style('height: 80px'):
-                    for i, count in enumerate(buckets):
-                        height_pct = (count / max_bucket) * 100 if max_bucket > 0 else 0
-                        label_text = f"{lat_min + i * bucket_width:.0f}"
-                        with ui.column().classes('flex-1 items-center gap-0.5'):
-                            ui.label(str(count)).classes('text-[#52525b] text-[9px] font-mono').style('height: 12px')
-                            ui.label('█').classes('text-[#5c8af0]').style(f'font-size: {max(8, height_pct * 0.6):.0f}px; line-height: 1')
-                            ui.label(label_text).classes('text-[#52525b] text-[8px] font-mono')
-            else:
-                ui.label('No latency data yet').classes('text-[#52525b] text-sm py-4')
+        Never colour alone: every use sits next to a ↑/→/↓ and the word.
+        """
+        return {
+            'up': 'var(--us-accent,#5c8af0)',
+            'down': 'var(--us-status-warn,#eab308)',
+            'flat': 'var(--us-text-muted,#71717a)',
+        }.get(direction, 'var(--us-text-muted,#71717a)')
 
     def _fmt_uptime(seconds):
-        if seconds < 60: return f"{seconds:.0f}s"
-        if seconds < 3600: return f"{seconds/60:.1f}m"
-        return f"{seconds/3600:.1f}h"
+        if seconds < 60:
+            return f'{seconds:.0f}s'
+        if seconds < 3600:
+            return f'{seconds / 60:.1f}m'
+        return f'{seconds / 3600:.1f}h'
 
-    # Poll for updates
     async def perf_refresh_loop():
         while True:
-            await asyncio.sleep(3)
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise
             refresh_performance()
 
     asyncio.create_task(perf_refresh_loop())
