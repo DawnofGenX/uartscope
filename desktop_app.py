@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 import types
 import uuid
@@ -3939,6 +3940,8 @@ def _seed_demo_performance():
     """
     import random
 
+    from app.core.performance_tracker import performance_tracker as _tracker
+
     rng = random.Random(20260929)
     base_pps, base_latency = 480.0, 4.2
     history = []
@@ -3960,7 +3963,56 @@ def _seed_demo_performance():
             "current_throughput": round(max(pps, 0.0) * rng.uniform(28, 34), 2),
             "avg_latency_ms": round(max(latency, 0.1), 2),
         })
-    performance_tracker._global_history = history
+    _tracker._global_history = history
+
+    # The tiles, the latency histogram and the per-device section all read
+    # _device_perf, not the global history. Seeding only the history left every
+    # one of them showing zero or "no data", which made the first screenshot
+    # look like a half-built screen.
+    #
+    # Two devices with a real shape each: the primary board carries the
+    # latency spike seen in the history above, the second is quieter and
+    # accumulates the errors, so per-device comparison has something to
+    # compare. Latency is capped at 100 samples because that is the tracker's
+    # own cap, so the histogram and the p99 caption describe real data.
+    now = datetime.now()
+    for dev_id, name, pps, latency_base, errors, drop_at in [
+        ('demo-device', 'Demo board (USB-serial)', 430.0, 3.9, 0, None),
+        ('demo-device-2', 'Bench rig (CAN)', 96.0, 6.4, 2, 0.55),
+    ]:
+        perf = _tracker._device_perf.get(dev_id)
+        if perf is None:
+            from app.core.performance_tracker import DevicePerformance
+            perf = DevicePerformance(device_id=dev_id, device_name=name)
+            _tracker._device_perf[dev_id] = perf
+        perf.device_name = name
+        perf.connected_at = now - timedelta(minutes=47)
+        perf.disconnected_at = (
+            (now - timedelta(minutes=2)) if drop_at else None)
+        perf.total_packets = int(pps * 2800)
+        perf.total_bytes = int(pps * 2800 * rng.uniform(26, 32))
+        perf.error_count = errors
+        perf.checksum_errors = 1 if errors else 0
+        # current_packet_rate and current_throughput are read-only properties
+        # derived from the window counters over elapsed time, so they are set
+        # by seeding those counters -- assigning to the properties raises.
+        # A 10s window is what the tracker uses in production, so the seeded
+        # counters are pps * 10 and the elapsed time is a real 10s.
+        perf._window_start = time.time() - 10.0
+        perf._window_packets = int(pps * 10)
+        perf._window_bytes = int(pps * 10 * rng.uniform(26, 32))
+
+        # 100 latency samples, matching the tracker's cap. The second device
+        # runs hot and gets a tail of slow samples, so p95/p99 separate the
+        # two boards rather than both reading the same.
+        latencies = []
+        for k in range(100):
+            value = latency_base + rng.uniform(-0.5, 0.5)
+            if drop_at and k / 100.0 > drop_at:
+                value += 3.2 + rng.uniform(0, 1.4)
+            latencies.append(round(max(value, 0.2), 2))
+        perf.latencies = latencies
+
 
 
 @ui.page('/smoke/{tab}')
