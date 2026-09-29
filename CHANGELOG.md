@@ -7,7 +7,58 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **A real plugin marketplace.** The Marketplace screen rendered a hardcoded
+  list of six plugins with invented download counts, and its Install button
+  slept for a second, set a flag, and asked you to restart. Nothing was
+  downloaded and no decoder was ever registered.
+
+  It now installs real decoders. `registry/registry.json` is a manifest of
+  installable plugins and ships three: LIN (LDF), J1939 and DALI. Installing
+  validates the module, requires a real `ProtocolDecoder` subclass, refuses any
+  id that would shadow a built-in, copies the file into the install directory,
+  records the install, and registers the decoder with the live decoder table so
+  it is usable immediately. Uninstall reverses all of it. Installs survive a
+  restart.
+
+  The API mirrors the UI: `GET /api/plugins`, `POST /api/plugins/{id}/install`,
+  `POST /api/plugins/{id}/uninstall`, `GET /api/plugins/installed`,
+  `POST /api/plugins/{id}/decode`, and `POST /api/plugins/refresh`.
+
+  **Installing a plugin executes third-party Python in the app process with no
+  sandbox.** Validation keeps the plugin honest about shape, not about intent —
+  a valid plugin can still do whatever its code does. This is stated on the
+  Marketplace screen rather than buried.
+
+- **A registry you can host yourself.** `UARTSCOPE_PLUGIN_REGISTRY` accepts a
+  URL or a path. The bundled manifest is the default, so the marketplace works
+  with no configuration.
+
+- **`GET /api/export/session/{id}/bundle`.** The `.uartscope` shareable capture
+  format could only be produced by the desktop UI, which assembled the zip in
+  memory from page state. A script or a second client had no way to export one.
+  The zip assembly now lives in `session_bundle.py` and both the UI and the API
+  call it, so the format is defined once.
+
+  Reading a bundle back recovers numeric types that the CSV round trip would
+  otherwise flatten to strings, and CSV values are quoted properly, so a metric
+  containing a comma no longer splits into two columns.
+
+### Fixed
+
+- **Plugin installs were lost on restart.** `PluginRegistry` wrote its state
+  file but never read it, so a new instance reported nothing installed even
+  though the record was on disk. The Marketplace screen showed an empty
+  Installed list after a restart. State is now loaded on construction;
+  registering the decoders still happens only at startup, where a missing or
+  invalid file can be handled.
+
 ### Removed
+
+- **Invented download counts.** The catalog served no telemetry, so the numbers
+  were fiction. A manifest entry may not carry a `downloads` field, and a test
+  enforces it.
 
 - **The long-form documentation tree.** `docs/` loses its twelve markdown files:
   the tutorial, five how-to guides, three reference documents, two

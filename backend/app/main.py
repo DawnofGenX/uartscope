@@ -3,6 +3,7 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +19,7 @@ from app.api.routes.protocols import router as protocols_router
 from app.api.routes.websocket import router as ws_router, setup_telemetry_pipeline
 from app.api.routes.performance import router as performance_router
 from app.api.routes.mqtt import router as mqtt_router
+from app.api.routes import marketplace as marketplace_routes
 from app.core.device_manager import device_manager
 from app.core.serial_reader import serial_reader
 from app.core.telemetry_engine import telemetry_engine
@@ -26,6 +28,12 @@ from app.core.performance_tracker import performance_tracker
 from app.core.mqtt_client import mqtt_manager, MQTTConnectionProfile, MQTTMessage
 from app.core.websocket_hub import ws_manager
 from app.core.alert_engine import alert_engine
+from app.core.protocol_decoder import protocol_manager
+from app.core.plugin_registry import (
+    PluginRegistry,
+    PluginValidationError,
+    default_registry_path,
+)
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -101,6 +109,44 @@ async def lifespan(app: FastAPI):
         mqtt_manager.add_profile(profile)
         await mqtt_manager.connect(profile.id)
 
+    # Plugin marketplace
+    #
+    # A configured URL wins; otherwise the bundled registry is used. With
+    # neither, the marketplace reports that it has no registry rather than
+    # showing an empty catalogue that reads like a broken one.
+    manifest_url = settings.plugin_registry or ""
+    if not manifest_url:
+        bundled = default_registry_path()
+        if bundled is not None:
+            manifest_url = str(bundled)
+        else:
+            logger.warning(
+                "No plugin registry configured and none bundled; "
+                "the marketplace will report that it is unavailable.")
+
+    plugin_registry = PluginRegistry(
+        manager=protocol_manager,
+        install_dir=Path(settings.plugin_install_dir),
+        state_file=Path(settings.plugin_install_dir).parent / "plugin_state.json",
+    )
+    marketplace_routes.configure(plugin_registry, manifest_url or None)
+
+    if manifest_url:
+        try:
+            # fetch_manifest takes a path; a remote registry is fetched by the
+            # route layer, which already handles the http(s) branch.
+            if manifest_url.startswith(('http://', 'https://')):
+                logger.info("Plugin registry: remote, fetched on first request")
+            else:
+                plugin_registry.fetch_manifest(Path(manifest_url))
+                restored = await plugin_registry.restore_installed()
+                logger.info("Plugin registry: %d available, %d installed",
+                            len(plugin_registry.list_available()), len(restored))
+        except PluginValidationError as exc:
+            # A malformed manifest must not stop the app from starting; the
+            # marketplace will surface the error on its own route.
+            logger.error("Plugin registry rejected: %s", exc)
+
     logger.info("Application ready")
     yield
 
@@ -139,6 +185,7 @@ app.include_router(protocols_router, prefix="/api")
 app.include_router(ws_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
 app.include_router(mqtt_router, prefix="/api")
+app.include_router(marketplace_routes.router, prefix="/api")
 
 
 @app.get("/api/health")

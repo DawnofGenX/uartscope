@@ -22,23 +22,27 @@ Node.js, no build step, no browser install.
 | Serial monitoring | Connect, disconnect, and send on any serial port; terminal view of the raw stream |
 | Live telemetry | Automatic `KEY:VALUE` and JSON parsing into per-metric charts grouped by unit |
 | Alerts | Rule-based conditions (`>`, `<`, `>=`, `<=`, `==`, range, rate-of-change) with per-rule cooldown and an alert history with acknowledgment |
-| Sessions | Record, replay, diff against a golden baseline, and export JSON/CSV; share as `.uartscope` bundles from the desktop app |
+| Sessions | Record, replay, diff against a golden baseline, and export JSON/CSV; share as `.uartscope` bundles from the desktop app or `GET /api/export/session/{id}/bundle` |
 | Protocol decoders | Six built-ins — UART Text, Modbus RTU, I2C, SPI, CAN Bus, CAN DBC — all with encode as well as decode |
+| Plugin marketplace | Install real third-party decoders from a registry manifest; `registry/registry.json` ships LIN, J1939 and DALI. Validation, persistence and uninstall are implemented |
 | MQTT | Multi-broker profiles, pub/sub, message history (backend API is live; the MQTT screen is still on the v1 UI — see below) |
 | REST + WebSocket API | FastAPI backend on :8080 with ~50 verified routes; the OpenAPI schema at `/docs` lists them all |
 
 ### What to know before you trust the screenshots
 
-- The **Marketplace** screen is a UI mock: the catalog is a hardcoded list with
-  sample download counts and authors. It is not wired to any registry.
-- Three screens — **Performance, MQTT, Marketplace** — still show a
-  "Not yet v2" pill; they run the pre-v2 UI while the rest of the app was
-  redesigned.
+- Installing a **plugin** runs third-party Python inside the app process and is
+  **not sandboxed**. A plugin that is registered gets its `can_decode` called
+  against live traffic. The marketplace validates and records what it installs,
+  but it cannot make untrusted code safe — read the source first. The screen
+  says this on the page.
+- The registry ships as a local manifest, not a hosted service. Set
+  `UARTSCOPE_PLUGIN_REGISTRY` to an `http(s)` URL to point at a remote one;
+  the manifest format is the same either way.
+- Two screens — **Performance** and **MQTT** — still show a "Not yet v2" pill;
+  they run the pre-v2 UI while the rest of the app was redesigned.
 - There is **no baudrate auto-detection**. You set the baudrate; the app uses it.
 - Sessions are **not** created automatically when you start streaming. You
   create a session when you want one recorded.
-- `.uartscope` session bundles are exported **from the desktop app only** —
-  there is no REST endpoint for them.
 
 ## Quick start (5 minutes)
 
