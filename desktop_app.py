@@ -4,10 +4,11 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 import types
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
@@ -161,10 +162,10 @@ NAV_ITEMS = [
 
 NAV_TAB_IDS = {tid for tid, *_ in NAV_ITEMS}
 
-# Screens still on the v1 treatment. Surfaced in the release notes as not-yet-v2
-# rather than hidden, so the nav is honest about what has been redesigned.
-# marketplace is no longer listed here: it drives the real plugin registry
-V2_PENDING = {'performance', 'mqtt'}
+# Every screen has been rebuilt to the v2 treatment, so the "Not yet v2" pill
+# no longer has anything to mark. Kept as an empty set rather than deleted: the
+# header still reads it, and a future screen can opt back in explicitly.
+V2_PENDING = set()
 
 
 def nav_label(tab_id):
@@ -1088,17 +1089,18 @@ def terminal_page():
     search_input.on_value_change(lambda: _apply_search_filter())
     level_select.on_value_change(lambda: _apply_search_filter())
 
-    async def stream_loop():
+    # Captured here in the page body, where a NiceGUI slot is live.
+    # ui.notify() resolves the client through NiceGUI's context, and a bare
+    # asyncio task has no slot -- reading it as the first statement of the
+    # coroutine raised RuntimeError before the first await, killing the stream
+    # loop on its first tick and losing every notification it was meant to
+    # deliver. The loop is handed the client instead of fetching it.
+    _charts_stream_client = ui.context.client
+
+    async def stream_loop(client=_charts_stream_client):
         if not selected_device:
             return
         queue = asyncio.Queue()
-
-        # ui.notify() resolves the client through NiceGUI's context, and a bare
-        # asyncio task has no slot, so calling it from here raises RuntimeError
-        # and the message never reaches anyone. Capture the client while the
-        # page is still being built, where there IS a slot, and push straight
-        # to it afterwards.
-        client = ui.context.client
 
         async def on_data(line=""):
             await queue.put(line)
@@ -1142,6 +1144,40 @@ def terminal_page():
             _notify(client, "Stream stopped unexpectedly", type='negative')
 
     asyncio.create_task(stream_loop())
+
+def _sparkline(values, unit):
+    """A 20-sample block sparkline. Colour is the series' unit group, so a
+    glance distinguishes temperature from signal strength.
+
+    Module scope rather than nested in charts_page: Charts, Performance and
+    MQTT all render these, and a per-screen copy is how a formatting idiom
+    drifts apart.
+    """
+    vals = values[-20:]
+    if len(vals) < 2:
+        return ''
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1.0
+    ramp = ' ▁▂▃▄▅▆▇█'
+    return ''.join(
+        ramp[min(int(((v - lo) / rng) * 8), 8)] for v in vals)
+
+
+def _trend(values):
+    """Direction of travel, as a word plus a glyph -- never colour alone.
+
+    Module scope; see _sparkline.
+    """
+    if len(values) < 2:
+        return None
+    delta = values[-1] - values[-2]
+    if abs(delta) < 1e-9:
+        return ('flat', '→', 'steady')
+    rel = abs(delta) / (abs(values[-2]) or 1.0)
+    if rel < 0.01:
+        return ('flat', '→', 'steady')
+    return ('up', '↑', 'rising') if delta > 0 else ('down', '↓', 'falling')
+
 
 def charts_page():
     """Charts: the Monitor surface.
@@ -1223,30 +1259,6 @@ def charts_page():
         if av >= 1:
             return f'{v:.2f}'
         return f'{v:.3f}'
-
-    def _sparkline(values, unit):
-        """A 20-sample block sparkline. Colour is the series' unit group, so a
-        glance distinguishes temperature from signal strength."""
-        vals = values[-20:]
-        if len(vals) < 2:
-            return ''
-        lo, hi = min(vals), max(vals)
-        rng = (hi - lo) or 1.0
-        ramp = ' ▁▂▃▄▅▆▇█'
-        return ''.join(
-            ramp[min(int(((v - lo) / rng) * 8), 8)] for v in vals)
-
-    def _trend(values):
-        """Direction of travel, as a word plus a glyph -- never colour alone."""
-        if len(values) < 2:
-            return None
-        delta = values[-1] - values[-2]
-        if abs(delta) < 1e-9:
-            return ('flat', '→', 'steady')
-        rel = abs(delta) / (abs(values[-2]) or 1.0)
-        if rel < 0.01:
-            return ('flat', '→', 'steady')
-        return ('up', '↑', 'rising') if delta > 0 else ('down', '↓', 'falling')
 
     # ── UI ───────────────────────────────────────────────────────────────
     with ui.column().classes('w-full gap-4'):
@@ -1484,11 +1496,18 @@ def charts_page():
         return '—'
 
     # ── Background update ────────────────────────────────────────────────
-    async def dashboard_refresh_loop():
-        # Captured while the page is being built. The loop runs detached, so
-        # ui.notify() below would raise RuntimeError and the user would get a
-        # frozen chart with no explanation.
-        client = ui.context.client
+    # Captured here, in the page body, where a NiceGUI slot is live. The
+    # refresh loop runs detached and has no slot, so it cannot read this itself.
+    _charts_client = ui.context.client
+
+    async def dashboard_refresh_loop(client):
+        # `client` is captured in the page body, not in here. The loop is
+        # detached -- asyncio.create_task() schedules it without the page-build
+        # slot -- and ui.context.client needs that slot, so reading it as the
+        # first statement of this coroutine raised RuntimeError before the
+        # first await. The refresh loop therefore died on its first tick and
+        # the chart silently froze: exactly the "frozen chart that looks live"
+        # the notify call was meant to warn about.
         while True:
             await asyncio.sleep(2)
             try:
@@ -1505,7 +1524,7 @@ def charts_page():
                 _notify(client, 'Chart refresh failed', type='negative')
                 return
 
-    asyncio.create_task(dashboard_refresh_loop())
+    asyncio.create_task(dashboard_refresh_loop(_charts_client))
     refresh_dashboard()
 
 def alerts_page():
@@ -1817,12 +1836,15 @@ def alerts_page():
     # Notify only. The queue itself re-renders on interaction; polling it every
     # 2s would fight the user mid-acknowledgement and rebuild the page under
     # their cursor.
-    async def check_new_alerts():
+    # Detached task: no slot, so ui.notify() would raise and the RuntimeError
+    # would be swallowed. Every alert would fire silently, which is the one
+    # outcome this screen cannot have. Captured here in the page body, where a
+    # slot exists -- the loop itself cannot read it, having been detached from
+    # the build.
+    _alerts_client = ui.context.client
+
+    async def check_new_alerts(client):
         last = len(get_alert_events())
-        # Detached task: no slot, so ui.notify() would raise and the RuntimeError
-        # would be swallowed. Every alert would fire silently, which is the one
-        # outcome this screen cannot have. Client captured at build time.
-        client = ui.context.client
         while True:
             await asyncio.sleep(2)
             try:
@@ -1843,7 +1865,7 @@ def alerts_page():
     _bind_alerts_page('show_add_rule_dialog', _show_add_rule_dialog_impl)
     _bind_alerts_page('toggle_acked', _toggle_acked_impl)
 
-    asyncio.create_task(check_new_alerts())
+    asyncio.create_task(check_new_alerts(_alerts_client))
     refresh_alerts()
 
 def sessions_page():
@@ -2459,125 +2481,354 @@ def _goto_sessions():
     rebuild()
 
 def performance_page():
-    """Performance Analytics - packet rate, throughput, latency, errors, uptime."""
+    """Performance: throughput, latency and errors over time.
+
+    v1 showed a snapshot, a per-device table, and a text histogram of the raw
+    latency samples. It never called `get_history()`, so the tracker kept a
+    full hour of packet-rate, throughput and latency snapshots that nothing
+    displayed. It also rebuilt the entire page every 3 seconds without clearing
+    the container, so the page grew without bound for as long as it was open.
+
+    v2 answers the three questions this screen exists to answer:
+
+      * Is it moving, and which way?      -- tiles carry a sparkline and a trend
+      * What did it look like, recently?  -- a selectable time window over the
+                                            tracker's real history
+      * Which device is responsible?      -- per-device rows, last
+
+    The window selector is honest about resolution: the tracker's own cadence
+    is 5s, so 1m is 12 points, 5m is 60, 15m is 180, and the block ramp has
+    nine levels. Past 15m the ramp flattens, so the caption says how many
+    points are actually on screen rather than implying more resolution than
+    the data has.
+    """
+    # Windows are (label, seconds). None means "everything the tracker holds".
+    WINDOWS = [('1m', 60), ('5m', 300), ('15m', 900), ('All', None)]
+    SNAPSHOT_INTERVAL = 5.0        # the tracker's own cadence
+    state = {'window': '5m'}
+
+    def _window_points():
+        """How many samples the selected window covers, and what is available."""
+        for label, secs in WINDOWS:
+            if label == state['window']:
+                want = None if secs is None else int(secs / SNAPSHOT_INTERVAL)
+                break
+        return want
+
+    def _history_for_window():
+        """The selected window's history, oldest first.
+
+        Sliced by age rather than by count so the window means the same thing
+        regardless of how densely the tracker happened to sample.
+        """
+        history = performance_tracker.get_history()
+        if not history:
+            return [], 0
+        want = _window_points()
+        if want is None:
+            return history, len(history)
+        return history[-want:], min(want, len(history))
+
+    def _fmt_count(n):
+        return f'{n:,}'
+
+    def _fmt_rate(series):
+        """Packet-rate span, so an axis is labelled with its own range."""
+        if not series:
+            return ''
+        lo, hi = min(series), max(series)
+        if hi - lo < 1:
+            return f'{lo:.0f} pps'
+        return f'{lo:.0f}–{hi:.0f} pps'
+
+    def _percentile(values, pct):
+        """Nearest-rank percentile.
+
+        Honest about its sample count at this size: the tracker keeps 100
+        latency samples per device, so p99 of 100 samples is the 99th value,
+        not a stable estimate. The caption says so rather than presenting it as
+        authoritative.
+        """
+        if not values:
+            return None
+        ordered = sorted(values)
+        idx = min(len(ordered) - 1, max(0, int(round(pct / 100.0 * len(ordered))) - 1))
+        return ordered[idx]
+
+    def _histogram(values, height=90):
+        """A block histogram with p50/p95/p99 marked.
+
+        v1 drew ten buckets of `█` glyphs with no scale and no markers. The
+        markers are what make a latency distribution diagnostic: p95 is the
+        number people actually alert on.
+        """
+        if not values:
+            return None
+        lo, hi = min(values), max(values)
+        if hi <= lo:
+            hi = lo + 1.0
+        buckets = 24
+        width = (hi - lo) / buckets
+        counts = [0] * buckets
+        for v in values:
+            counts[min(int((v - lo) / width), buckets - 1)] += 1
+        peak = max(counts) or 1
+        ramp = ' ▁▂▃▄▅▆▇█'
+        marks = {}
+        for pct in (50, 95, 99):
+            p = _percentile(values, pct)
+            if p is not None:
+                marks[min(int((p - lo) / width), buckets - 1)] = pct
+        cells = []
+        for i, count in enumerate(counts):
+            level = int((count / peak) * 8)
+            glyph = ramp[min(level + 1, 8)] if count else ' '
+            if i in marks:
+                glyph = f'{glyph}│'
+            cells.append(glyph)
+        return {
+            'row': ''.join(cells),
+            'lo': lo,
+            'hi': hi,
+            'marks': marks,
+            'n': len(values),
+            'height': height,
+        }
+
+    performance_container = ui.column().classes('w-full gap-5')
+
     def refresh_performance():
+        # clear() leaves the ambient context on a deleted slot, so the rebuild
+        # must re-enter explicitly. Every v2 screen does this; v1 did not, and
+        # the page grew without bound.
+        performance_container.clear()
+
         summary = performance_tracker.get_summary()
         snapshot = performance_tracker.get_global_snapshot()
         all_perf = performance_tracker.get_all_perf()
+        history, available = _history_for_window()
+        full_history = performance_tracker.get_history()
 
-        # Main stats row
-        with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val, color in [
-                ('Current PPS', f"{snapshot.get('current_packet_rate', 0):.1f}", '#5c8af0'),
-                ('Throughput', format_bytes(snapshot.get('current_throughput', 0)) + '/s', '#22c55e'),
-                ('Avg Latency', f"{snapshot.get('avg_latency_ms', 0):.1f} ms", '#eab308'),
-                ('Total Errors', str(summary.get('total_errors', 0)), '#ef4444'),
-                ('Error Rate', f"{summary.get('error_rate_per_min', 0):.1f}/min", '#ef4444'),
-            ]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(str(val)).classes('text-lg font-medium font-mono').style(f'color: {color}')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
+        pps_series = [s.get('current_packet_rate', 0) for s in history]
+        tput_series = [s.get('current_throughput', 0) for s in history]
+        lat_series = [s.get('avg_latency_ms', 0) for s in history]
+        all_latencies = [lat for p in all_perf.values() for lat in p.latencies]
 
-        # Aggregate totals
-        with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val in [
-                ('Total Packets', f"{summary.get('total_packets', 0):,}"),
-                ('Total Data', format_bytes(summary.get('total_bytes', 0))),
-                ('Avg PPS', f"{summary.get('avg_packet_rate', 0):.1f}"),
-                ('Avg Throughput', format_bytes(summary.get('avg_throughput', 0)) + '/s'),
-                ('Uptime', format_duration(None, None, seconds=summary.get('total_uptime_seconds', 0))),
-            ]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(str(val)).classes('text-lg font-medium text-white font-mono')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
+        with performance_container:
+            with ui.row().classes('w-full items-center justify-between'):
+                with ui.column().classes('gap-1'):
+                    ui.label('Performance').classes('us-title')
+                    ui.label('Throughput, latency and errors over time').classes(
+                        'us-caption us-muted')
+                with ui.row().classes('items-center gap-3'):
+                    ui.label('Window').classes('us-label us-muted')
+                    window_select = ui.select(
+                        {label: label for label, _ in WINDOWS},
+                        value=state['window'],
+                        on_change=lambda e: _set_window(e.value),
+                    ).props('dense outlined options-dense').classes('w-[110px]')
+                    ui.label('Updates every 3s').classes('us-micro us-muted')
 
-        # Per-device performance table
-        with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            ui.label('Per-Device Performance').classes('text-white font-medium mb-3')
+            # ── Stat tiles ──────────────────────────────────────────────
+            # Each tile carries the sparkline for its own series, so the row
+            # answers "is it moving" without a chart.
+            with ui.row().classes('w-full gap-3 flex-wrap'):
+                tiles = [
+                    ('Packet rate', f"{snapshot.get('current_packet_rate', 0):.1f}",
+                     'pps', pps_series),
+                    ('Throughput',
+                     format_bytes(snapshot.get('current_throughput', 0)), '/s',
+                     tput_series),
+                    ('Avg latency',
+                     f"{snapshot.get('avg_latency_ms', 0):.1f}", 'ms',
+                     lat_series),
+                    ('Total errors', _fmt_count(summary.get('total_errors', 0)),
+                     '', []),
+                    ('Error rate', f"{summary.get('error_rate_per_min', 0):.1f}",
+                     '/min', []),
+                ]
+                for label, value, unit, series in tiles:
+                    with ui.column().classes('us-card flex-1 gap-1 min-w-[150px] !p-4'):
+                        ui.label(label).classes('us-label us-muted')
+                        with ui.row().classes('items-baseline gap-1'):
+                            ui.label(value).classes('us-metric us-mono')
+                            if unit:
+                                ui.label(unit).classes('us-unit')
+                        if series:
+                            ui.label(_sparkline(series, label)).classes('us-spark')
+                            trend = _trend(series)
+                            if trend:
+                                ui.label(trend[1]).classes('us-trend').style(
+                                    f'color:{_trend_colour(trend[0])}')
+                                ui.label(trend[2]).classes('us-micro us-muted')
+                        else:
+                            # Errors have no history series of their own, so
+                            # say that rather than drawing a flat line that
+                            # looks like data.
+                            ui.label('no series').classes('us-micro us-muted')
 
-            if not all_perf:
-                ui.label('No device data yet').classes('text-[#52525b] text-sm py-4')
-            else:
-                # Table
-                with ui.table({
-                    'columns': [
-                        {'name': 'device', 'label': 'Device', 'field': 'name', 'align': 'left', 'classes': 'text-[#71717a] text-xs'},
-                        {'name': 'status', 'label': 'Status', 'field': 'status', 'align': 'left'},
-                        {'name': 'uptime', 'label': 'Uptime', 'field': 'uptime', 'align': 'right'},
-                        {'name': 'packets', 'label': 'Packets', 'field': 'packets', 'align': 'right'},
-                        {'name': 'data', 'label': 'Data', 'field': 'data', 'align': 'right'},
-                        {'name': 'pps', 'label': 'PPS', 'field': 'pps', 'align': 'right'},
-                        {'name': 'throughput', 'label': 'Throughput', 'field': 'throughput', 'align': 'right'},
-                        {'name': 'latency', 'label': 'Latency', 'field': 'latency', 'align': 'right'},
-                        {'name': 'errors', 'label': 'Errors', 'field': 'errors', 'align': 'right'},
-                    ],
-                    'rows': [],
-                    'row_key': 'id',
-                }) as perf_table:
-                    rows = []
+            # ── Totals ──────────────────────────────────────────────────
+            with ui.row().classes('w-full gap-3 flex-wrap'):
+                for label, value in [
+                    ('Total packets', _fmt_count(summary.get('total_packets', 0))),
+                    ('Total data', format_bytes(summary.get('total_bytes', 0))),
+                    ('Uptime', format_duration(
+                        None, None,
+                        seconds=summary.get('total_uptime_seconds', 0))),
+                    ('Connected', f"{snapshot.get('connected_devices', 0)}"),
+                ]:
+                    with ui.column().classes('us-card flex-1 gap-1 min-w-[140px] !p-3'):
+                        ui.label(label).classes('us-label us-muted')
+                        ui.label(value).classes('us-metric us-mono')
+
+            if not full_history:
+                with ui.column().classes('us-empty w-full'):
+                    with ui.column().classes('gap-2'):
+                        ui.label('No performance data yet').classes('us-display')
+                        ui.label(
+                            'Start a device stream and this fills with packet '
+                            'rate, throughput and latency as it arrives.'
+                        ).classes('us-body')
+                return
+
+            # ── Time series ─────────────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                with ui.row().classes('w-full items-center justify-between'):
+                    ui.label('Over time').classes('us-subhead')
+                    # Say how much resolution is really on screen. The block
+                    # ramp has nine levels; past ~180 points it flattens and
+                    # the shape stops being readable.
+                    if available < (_window_points() or available):
+                        ui.label(
+                            f'{available} samples (tracker holds '
+                            f'{len(full_history)})'
+                        ).classes('us-micro us-muted')
+                    elif available > 180:
+                        ui.label(
+                            f'{available} samples — shape only at this density'
+                        ).classes('us-micro us-muted')
+                    else:
+                        ui.label(f'{available} samples').classes('us-micro us-muted')
+
+                for name, series, unit in [
+                    ('Packet rate', pps_series, 'pps'),
+                    ('Throughput', tput_series, 'bytes/s'),
+                    ('Latency', lat_series, 'ms'),
+                ]:
+                    with ui.column().classes('gap-1'):
+                        with ui.row().classes('items-baseline gap-2'):
+                            ui.label(name).classes('us-label us-muted')
+                            ui.label(_fmt_rate(series)).classes('us-micro us-muted')
+                        ui.label(_sparkline(series, name)).classes('us-spark')
+                        if series:
+                            trend = _trend(series)
+                            if trend:
+                                with ui.row().classes('items-center gap-1'):
+                                    ui.label(trend[1]).classes('us-trend').style(
+                                        f'color:{_trend_colour(trend[0])}')
+                                    ui.label(trend[2]).classes('us-micro us-muted')
+                        else:
+                            ui.label('no samples in this window').classes(
+                                'us-micro us-muted')
+
+            # ── Latency distribution ────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                with ui.row().classes('w-full items-center justify-between'):
+                    ui.label('Latency distribution').classes('us-subhead')
+                    if all_latencies:
+                        p50 = _percentile(all_latencies, 50)
+                        p95 = _percentile(all_latencies, 95)
+                        p99 = _percentile(all_latencies, 99)
+                        ui.label(
+                            f'p50 {p50:.1f}ms · p95 {p95:.1f}ms · p99 {p99:.1f}ms'
+                        ).classes('us-micro us-mono')
+                if all_latencies:
+                    hist = _histogram(all_latencies)
+                    ui.label(hist['row']).classes('us-spark')
+                    with ui.row().classes('w-full justify-between'):
+                        ui.label(f"{hist['lo']:.1f}ms").classes('us-micro us-muted')
+                        ui.label('│ marks p50, p95, p99').classes('us-micro us-muted')
+                        ui.label(f"{hist['hi']:.1f}ms").classes('us-micro us-muted')
+                    ui.label(
+                        f"{hist['n']} samples (100 per device — p99 over a "
+                        f"small sample is the 99th value, not a stable estimate)"
+                    ).classes('us-micro us-muted')
+                else:
+                    ui.label('No latency samples yet').classes('us-body us-muted')
+
+            # ── Per-device ──────────────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                ui.label('Per device').classes('us-subhead')
+                if not all_perf:
+                    ui.label('No device data yet').classes('us-body us-muted')
+                else:
                     for dev_id, p in all_perf.items():
-                        is_connected = p.connected_at and not p.disconnected_at
-                        rows.append({
-                            'id': dev_id,
-                            'name': p.device_name or dev_id,
-                            'status': '● LIVE' if is_connected else '○ OFF',
-                            'uptime': _fmt_uptime(p.uptime_seconds),
-                            'packets': f"{p.total_packets:,}",
-                            'data': format_bytes(p.total_bytes),
-                            'pps': f"{p.current_packet_rate:.1f}",
-                            'throughput': format_bytes(int(p.current_throughput)) + '/s',
-                            'latency': f"{p.avg_latency_ms:.1f}ms",
-                            'errors': str(p.error_count),
-                        })
-                    perf_table.rows = rows
-                    # Style status column
-                    perf_table.props('separator=cell')
+                        live = p.connected_at and not p.disconnected_at
+                        with ui.column().classes('us-row w-full gap-1 !py-2'):
+                            with ui.row().classes('w-full items-center gap-3'):
+                                with ui.row().classes('items-center gap-2 flex-1 min-w-0'):
+                                    ui.label(' ').classes(
+                                        f"us-dot {'us-dot-live' if live else 'us-dot-idle'}")
+                                    with ui.column().classes('gap-0 min-w-0'):
+                                        ui.label(
+                                            p.device_name or dev_id
+                                        ).classes('us-body us-truncate')
+                                        ui.label(
+                                            f"{_fmt_uptime(p.uptime_seconds)} · "
+                                            f"{_fmt_count(p.total_packets)} packets · "
+                                            f"{format_bytes(p.total_bytes)}"
+                                        ).classes('us-micro us-muted us-mono')
+                                with ui.row().classes('items-baseline gap-3'):
+                                    ui.label(
+                                        f"{p.current_packet_rate:.1f}"
+                                    ).classes('us-micro us-mono')
+                                    ui.label('pps').classes('us-micro us-muted')
+                                    ui.label(
+                                        f"{p.avg_latency_ms:.1f}"
+                                    ).classes('us-micro us-mono')
+                                    ui.label('ms').classes('us-micro us-muted')
+                                    if p.error_count:
+                                        ui.label(
+                                            f"{p.error_count} err"
+                                        ).classes('us-micro').style(
+                                            'color:var(--us-status-error,#ef4444)')
+                            if p.latencies and len(p.latencies) > 1:
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.label(_sparkline(p.latencies, 'latency')).classes(
+                                        'us-spark')
+                                    trend = _trend(p.latencies)
+                                    if trend:
+                                        ui.label(trend[1]).classes('us-trend').style(
+                                            f'color:{_trend_colour(trend[0])}')
 
-        # Latency sparkline (text-based mini chart)
-        with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            with ui.row().classes('w-full items-center justify-between mb-3'):
-                ui.label('Latency Distribution (last 100 samples)').classes('text-white font-medium')
-                ui.label(f"Avg: {summary.get('avg_latency_ms', 0):.1f}ms").classes('text-[#52525b] text-xs font-mono')
+    def _set_window(value):
+        state['window'] = value or '5m'
+        refresh_performance()
 
-            # Collect all latency samples
-            all_latencies = []
-            for p in all_perf.values():
-                all_latencies.extend(p.latencies)
+    def _trend_colour(direction):
+        """Trend colour, paired with the glyph and word elsewhere.
 
-            if all_latencies:
-                # Build histogram (10 buckets)
-                lat_max = max(all_latencies)
-                lat_min = min(all_latencies)
-                bucket_count = 10
-                bucket_width = (lat_max - lat_min) / bucket_count if lat_max > lat_min else 1
-                buckets = [0] * bucket_count
-                for lat in all_latencies:
-                    idx = min(int((lat - lat_min) / bucket_width), bucket_count - 1) if bucket_width > 0 else 0
-                    buckets[idx] += 1
-
-                max_bucket = max(buckets) if buckets else 1
-                with ui.row().classes('w-full items-end gap-1').style('height: 80px'):
-                    for i, count in enumerate(buckets):
-                        height_pct = (count / max_bucket) * 100 if max_bucket > 0 else 0
-                        label_text = f"{lat_min + i * bucket_width:.0f}"
-                        with ui.column().classes('flex-1 items-center gap-0.5'):
-                            ui.label(str(count)).classes('text-[#52525b] text-[9px] font-mono').style('height: 12px')
-                            ui.label('█').classes('text-[#5c8af0]').style(f'font-size: {max(8, height_pct * 0.6):.0f}px; line-height: 1')
-                            ui.label(label_text).classes('text-[#52525b] text-[8px] font-mono')
-            else:
-                ui.label('No latency data yet').classes('text-[#52525b] text-sm py-4')
+        Never colour alone: every use sits next to a ↑/→/↓ and the word.
+        """
+        return {
+            'up': 'var(--us-accent,#5c8af0)',
+            'down': 'var(--us-status-warn,#eab308)',
+            'flat': 'var(--us-text-muted,#71717a)',
+        }.get(direction, 'var(--us-text-muted,#71717a)')
 
     def _fmt_uptime(seconds):
-        if seconds < 60: return f"{seconds:.0f}s"
-        if seconds < 3600: return f"{seconds/60:.1f}m"
-        return f"{seconds/3600:.1f}h"
+        if seconds < 60:
+            return f'{seconds:.0f}s'
+        if seconds < 3600:
+            return f'{seconds / 60:.1f}m'
+        return f'{seconds / 3600:.1f}h'
 
-    # Poll for updates
     async def perf_refresh_loop():
         while True:
-            await asyncio.sleep(3)
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise
             refresh_performance()
 
     asyncio.create_task(perf_refresh_loop())
@@ -2585,125 +2836,324 @@ def performance_page():
 
 
 def mqtt_page():
+    """MQTT: broker connections, subscriptions, and the message stream.
 
+    v1's capabilities were fine; its layout was not. Everything worked --
+    add/connect/disconnect/delete a broker, subscribe and unsubscribe topics,
+    publish, read the last 50 messages -- but it presented all of it in the old
+    treatment while the rest of the app was rebuilt around a different set of
+    ideas: a device is a first-class object with a status dot, a topic belongs
+    to the connection carrying it, and an empty state is something you design
+    rather than a grey label.
+
+    v2 keeps all of that and fixes three things v1 got wrong:
+
+      * Subscriptions were a flat list, so a topic was not visibly attached to
+        the broker that carries it. They are grouped by connection now.
+      * Message history had no filter, so with more than one broker you could
+        not tell whose traffic you were reading. It filters by connection and
+        topic now, and follows the newest message unless paused.
+      * refresh_mqtt rebuilt the whole page every 3s without clearing the
+        container, so the page grew without bound for as long as it was open.
+    """
     _bind_mqtt_page, _late_mqtt_page = _late_bindings()
-    """MQTT Integration - broker connections, subscriptions, message history."""
     import time as _time
 
+    # Message history is a bounded ring in the manager (1000). 200 is a
+    # readable page that still shows a session's shape; the selector is there
+    # because someone debugging a burst wants the other end of the range.
+    LIMITS = [('50', 50), ('200', 200), ('1000', 1000)]
+    state = {'limit': 200, 'connection': 'all', 'topic': '', 'following': True}
+
+    def _selected_messages():
+        """History filtered by connection and topic substring.
+
+        The manager owns the ring and the 1000-message cap; this only narrows
+        what is displayed, and says so in the caption when it has.
+        """
+        limit = int(state['limit'])
+        msgs = mqtt_manager.get_message_history(limit=limit)
+        conn = state['connection']
+        topic = (state['topic'] or '').lower()
+        out = []
+        for m in msgs:
+            if conn != 'all' and m.connection_id != conn:
+                continue
+            if topic and topic not in (m.topic or '').lower():
+                continue
+            out.append(m)
+        return out, limit
+
+    mqtt_container = ui.column().classes('w-full gap-5')
+
     def refresh_mqtt():
+        # clear() leaves the ambient context on a deleted slot; rebuild inside
+        # an explicit `with` so the ambient slot is valid again.
+        mqtt_container.clear()
+
         profiles = mqtt_manager.get_all_profiles()
         stats = mqtt_manager.get_stats()
-        messages = mqtt_manager.get_message_history(limit=50)
+        messages, limit = _selected_messages()
 
-        # Stats bar
-        with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val, color in [
-                ('Connections', f"{stats.get('connected', 0)}/{stats.get('total_connections', 0)}", '#5c8af0'),
-                ('Messages', str(stats.get('total_messages', 0)), '#22c55e'),
-                ('Data', format_bytes(stats.get('total_bytes', 0)), '#eab308'),
-                ('History', str(stats.get('history_size', 0)), '#71717a'),
-            ]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(str(val)).classes('text-lg font-medium font-mono').style(f'color: {color}')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
+        with mqtt_container:
+            with ui.row().classes('w-full items-center justify-between'):
+                with ui.column().classes('gap-1'):
+                    ui.label('MQTT').classes('us-title')
+                    ui.label('Broker connections and the message stream').classes(
+                        'us-caption us-muted')
+                with ui.row().classes('items-center gap-2'):
+                    ui.label('Updates every 3s').classes('us-micro us-muted')
+                    _btn('+ Add broker', 'us-btn-primary',
+                         _late_mqtt_page('show_add_broker_dialog'))
 
-        # Connection profiles
-        with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            with ui.row().classes('w-full items-center justify-between mb-3'):
-                ui.label('Broker Connections').classes('text-white font-medium')
-                ui.button('+ Add Broker', on_click=_late_mqtt_page('show_add_broker_dialog')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+            # ── Stat tiles ──────────────────────────────────────────────
+            with ui.row().classes('w-full gap-3 flex-wrap'):
+                for label, value, unit in [
+                    ('Connections',
+                     f"{stats.get('connected', 0)}/{stats.get('total_connections', 0)}",
+                     ''),
+                    ('Messages', f"{stats.get('total_messages', 0):,}", ''),
+                    ('Data', format_bytes(stats.get('total_bytes', 0)), ''),
+                    ('Buffered', f"{stats.get('history_size', 0):,}", '/1000'),
+                ]:
+                    with ui.column().classes('us-card flex-1 gap-1 min-w-[140px] !p-4'):
+                        ui.label(label).classes('us-label us-muted')
+                        with ui.row().classes('items-baseline gap-1'):
+                            ui.label(value).classes('us-metric us-mono')
+                            if unit:
+                                ui.label(unit).classes('us-unit')
 
-            if not profiles:
-                ui.label('No MQTT connections configured').classes('text-[#52525b] text-sm py-4')
-            else:
-                with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
+            # ── Brokers ─────────────────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                ui.label('Connections').classes('us-subhead')
+                if not profiles:
+                    with ui.column().classes('us-empty w-full'):
+                        with ui.column().classes('gap-2'):
+                            ui.label('No brokers configured').classes('us-display')
+                            ui.label(
+                                'Add a broker to subscribe to topics and watch '
+                                'messages arrive here.'
+                            ).classes('us-body')
+                        _btn('+ Add broker', 'us-btn-primary',
+                             _late_mqtt_page('show_add_broker_dialog'))
+                else:
                     for profile in profiles:
-                        with ui.card().classes('w-full p-3').style('background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.06)'):
-                            with ui.row().classes('w-full items-center justify-between mb-3'):
-                                with ui.row().classes('items-center gap-3'):
-                                    sc = '#22c55e' if profile.connected else '#52525b'
-                                    ui.label(' ').classes('inline-block w-2 h-2 rounded-full').style(f'background: {sc}')
-                                    with ui.column().classes('gap-0.5'):
-                                        ui.label(profile.name).classes('text-white font-medium text-sm')
-                                        ui.label(f"{profile.broker}:{profile.port}").classes('text-[#52525b] text-xs font-mono')
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.label(f"{profile.messages_received} msgs").classes('text-[#52525b] text-xs font-mono')
+                        with ui.column().classes('us-row w-full gap-2 !py-2'):
+                            with ui.row().classes('w-full items-center gap-3'):
+                                with ui.row().classes(
+                                        'items-center gap-2 flex-1 min-w-0'):
+                                    ui.label(' ').classes(
+                                        f"us-dot {'us-dot-live' if profile.connected else 'us-dot-idle'}")
+                                    with ui.column().classes('gap-0 min-w-0'):
+                                        ui.label(profile.name).classes(
+                                            'us-body us-truncate')
+                                        ui.label(
+                                            f"{profile.broker}:{profile.port}"
+                                        ).classes('us-micro us-muted us-mono')
+                                with ui.row().classes('items-baseline gap-3'):
+                                    ui.label(f"{profile.messages_received:,}").classes(
+                                        'us-micro us-mono')
+                                    ui.label('msgs').classes('us-micro us-muted')
+                                    if profile.last_error:
+                                        ui.label(profile.last_error).classes(
+                                            'us-micro us-truncate').style(
+                                            'max-width:220px;color:var(--us-status-error,#ef4444)')
+                                with ui.row().classes('items-center gap-1'):
                                     if profile.connected:
-                                        ui.button('Disconnect', on_click=lambda p=profile: disconnect_broker(p)).classes('bg-[#ef4444] text-white px-2 py-0.5 text-xs rounded')
+                                        _btn('Disconnect', 'us-btn-danger',
+                                             lambda p=profile: disconnect_broker(p))
                                     else:
-                                        ui.button('Connect', on_click=lambda p=profile: connect_broker(p)).classes('bg-[#22c55e] text-white px-2 py-0.5 text-xs rounded')
-                                    ui.button('Delete', on_click=lambda p=profile: delete_broker(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#ef4444] px-2 py-0.5 text-xs rounded')
+                                        _btn('Connect', 'us-btn-secondary',
+                                             lambda p=profile: connect_broker(p))
+                                    _btn('Delete', 'us-btn-ghost',
+                                         lambda p=profile: delete_broker(p))
 
-        # Subscriptions + Publish panel
-        if profiles:
-            with ui.row().classes('w-full gap-3 mb-4'):
-                # Subscriptions
-                with ui.card().classes('flex-1 p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label('Subscriptions').classes('text-white font-medium mb-2')
-                    with ui.column().classes('w-full gap-0.5'):
+            # ── Subscriptions, grouped by the connection carrying them ──
+            if profiles:
+                subscribed = [(p, t) for p in profiles
+                              for t in (p.subscribed_topics or [])]
+                with ui.column().classes('us-panel gap-3 !p-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        ui.label('Subscriptions').classes('us-subhead')
+                        if subscribed:
+                            ui.label(f'{len(subscribed)} topics').classes(
+                                'us-micro us-muted')
+                    if not subscribed:
+                        ui.label('No subscriptions yet').classes('us-body us-muted')
+                    else:
                         for profile in profiles:
-                            if profile.subscribed_topics:
-                                for topic in profile.subscribed_topics:
-                                    with ui.row().classes('items-center gap-2 p-1.5 rounded').style('background: rgba(255,255,255,0.01)'):
-                                        ui.label('📡').classes('text-xs')
-                                        ui.label(topic).classes('text-[#e4e4e7] text-xs font-mono flex-1')
-                                        ui.button('✕', on_click=lambda p=profile, t=topic: unsubscribe_topic(p, t)).classes('text-[#ef4444] text-xs px-1')
+                            topics = [t for t in (profile.subscribed_topics or [])]
+                            if not topics:
+                                continue
+                            with ui.column().classes('gap-1 !py-1'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.label(' ').classes(
+                                        f"us-dot {'us-dot-live' if profile.connected else 'us-dot-idle'}")
+                                    ui.label(profile.name).classes(
+                                        'us-micro us-muted us-mono')
+                                for topic in topics:
+                                    with ui.row().classes(
+                                            'items-center gap-2 pl-4'):
+                                        ui.label(topic).classes(
+                                            'us-mono us-body us-truncate flex-1')
+                                        _btn('✕', 'us-btn-ghost',
+                                             lambda p=profile, t=topic:
+                                                 unsubscribe_topic(p, t))
 
-                # Publish panel
-                with ui.card().classes('flex-1 p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label('Publish Message').classes('text-white font-medium mb-2')
-                    pub_profile = ui.select(
-                        {p.id: p.name for p in profiles if p.connected},
-                        label='Connection',
-                        value=profiles[0].id if profiles else None,
-                    ).classes('w-full mb-2').props('outlined').style('color: #e4e4e7')
-                    pub_topic = ui.input('Topic', value='command').classes('w-full mb-2').props('outlined').style('color: #e4e4e7')
-                    pub_payload = ui.textarea('Payload (JSON or text)', value='{"cmd": "status"}').classes('w-full mb-2').props('outlined').style('color: #e4e4e7; font-family: monospace')
-                    ui.button('Publish', on_click=lambda: do_publish(pub_profile.value, pub_topic.value, pub_payload.value)).classes('bg-[#5c6fd0] text-white px-4 py-1.5 text-sm rounded-lg w-full')
+            # ── Publish ─────────────────────────────────────────────────
+            connected = [p for p in profiles if p.connected]
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                ui.label('Publish').classes('us-subhead')
+                if not connected:
+                    ui.label(
+                        'Connect a broker to publish.').classes('us-body us-muted')
+                else:
+                    state.setdefault('pub_profile', connected[0].id)
+                    with ui.row().classes('w-full gap-3 items-end flex-wrap'):
+                        pub_profile = ui.select(
+                            {p.id: p.name for p in connected},
+                            label='Connection',
+                            value=state['pub_profile'],
+                            on_change=lambda e: state.__setitem__(
+                                'pub_profile', e.value),
+                        ).props('dense outlined').classes('min-w-[180px]')
+                        pub_topic = ui.input('Topic', value='command').props(
+                            'dense outlined').classes('min-w-[220px]')
+                        pub_payload = ui.input('Payload').props(
+                            'dense outlined').classes('min-w-[220px] flex-1')
+                        _btn('Publish', 'us-btn-primary',
+                             lambda: do_publish(
+                                 state.get('pub_profile'),
+                                 pub_topic.value or '',
+                                 pub_payload.value or ''))
 
-        # Message history
-        with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            ui.label('Message History (last 50)').classes('text-white font-medium mb-3')
-            if not messages:
-                ui.label('No messages yet. Connect to an MQTT broker to receive data.').classes('text-[#52525b] text-sm py-4')
-            else:
-                with ui.column().classes('w-full gap-1 max-h-72 overflow-y-auto'):
-                    for msg in reversed(messages):
-                        with ui.row().classes('w-full items-start gap-2 p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
-                            ui.label(msg.timestamp.strftime('%H:%M:%S')).classes('text-[#52525b] text-xs font-mono')
-                            ui.label(msg.topic).classes('text-[#5c8af0] text-xs font-mono min-w-32')
-                            ui.label(msg.payload[:80]).classes('text-[#e4e4e7] text-xs flex-1 font-mono')
+            # ── Message history ─────────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                with ui.row().classes('w-full items-center justify-between'):
+                    ui.label('Messages').classes('us-subhead')
+                    with ui.row().classes('items-center gap-2'):
+                        # Built as a real dict. `{'all': ...}.update({...})` looks
+                        # like a fluent chain but update() returns None, which
+                        # is what ui.select then choked on -- the screen 500'd
+                        # on first render whenever there were no profiles.
+                        connection_options = {'all': 'All connections'}
+                        connection_options.update({p.id: p.name for p in profiles})
+                        ui.select(
+                            connection_options,
+                            value=state['connection'],
+                            on_change=lambda e: _set_filter('connection', e.value),
+                        ).props('dense outlined options-dense').classes('w-[180px]')
+                        ui.input('Topic contains', value=state['topic']).props(
+                            'dense outlined').classes('w-[160px]').on_value_change(
+                            lambda e: _set_filter('topic', e.value))
+                        ui.select(
+                            {label: label for label, _ in LIMITS},
+                            value=str(state['limit']),
+                            on_change=lambda e: _set_filter('limit', e.value),
+                        ).props('dense outlined options-dense').classes('w-[90px]')
+                        if state['following']:
+                            _btn('⏸ Pause', 'us-btn-ghost',
+                                 _late_mqtt_page('toggle_follow'))
+                        else:
+                            _btn('▶ Follow', 'us-btn-secondary',
+                                 _late_mqtt_page('toggle_follow'))
 
-    # Actions
-    def _show_add_broker_dialog_impl():
-        dialog = ui.dialog()
-        with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
-            ui.label('Add MQTT Broker').classes('text-white font-medium mb-4 text-lg')
-            name = ui.input('Name', value='My Broker').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            broker = ui.input('Broker Host', value='broker.hivemq.com').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            port = ui.number('Port', value=1883).classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            topic_prefix = ui.input('Topic Prefix', value='uartscope').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            username = ui.input('Username (optional)').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            password = ui.input('Password (optional)').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            with ui.row().classes('gap-2 justify-end w-full mt-4'):
-                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
-                ui.button('Add', on_click=lambda: create_broker(
-                    name.value, broker.value, int(port.value), topic_prefix.value,
-                    username.value or None, password.value or None, dialog
-                )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+                if not messages:
+                    with ui.column().classes('us-empty w-full'):
+                        with ui.column().classes('gap-2'):
+                            if not profiles:
+                                ui.label('Nothing to show yet').classes('us-display')
+                                ui.label(
+                                    'Add and connect a broker; messages appear '
+                                    'here as they arrive.'
+                                ).classes('us-body')
+                            elif state['connection'] != 'all' or state['topic']:
+                                ui.label('No messages match this filter').classes(
+                                    'us-display')
+                                ui.label(
+                                    'Clear the connection or topic filter to see '
+                                    'the full stream.'
+                                ).classes('us-body')
+                            else:
+                                ui.label('No messages yet').classes('us-display')
+                                ui.label(
+                                    'Subscribe to a topic on a connected broker '
+                                    'and traffic will appear here.'
+                                ).classes('us-body')
+                else:
+                    ui.label(
+                        f'{len(messages)} shown'
+                        + (f' of the last {limit}' if limit else '')
+                        + (f" on '{state['topic']}'" if state['topic'] else '')
+                        + (' · following' if state['following'] else ' · paused')
+                    ).classes('us-micro us-muted')
+                    # Newest first: a message stream is read from the bottom,
+                    # and sorting descending means the most recent message is
+                    # always the first thing on screen.
+                    for m in reversed(messages):
+                        with ui.column().classes('us-log-line gap-0'):
+                            with ui.row().classes('items-baseline gap-2'):
+                                ui.label(_ts(m.timestamp)).classes(
+                                    'us-micro us-muted us-mono')
+                                ui.label(m.topic).classes(
+                                    'us-mono us-body us-truncate')
+                            ui.label(str(m.payload)).classes(
+                                'us-mono us-muted us-truncate')
 
-    _bind_mqtt_page('show_add_broker_dialog', _show_add_broker_dialog_impl)
+    def _ts(value):
+        """A message timestamp as HH:MM:SS, or the raw value if unparseable."""
+        if not value:
+            return '--:--:--'
+        text = str(value)
+        try:
+            from datetime import datetime as _dt
+            return _dt.fromisoformat(text).strftime('%H:%M:%S')
+        except (ValueError, TypeError):
+            return text[-8:] if len(text) >= 8 else text
 
-    async def create_broker(name, broker, port, topic_prefix, username, password, dialog):
+    def _set_filter(key, value):
+        state[key] = value if value not in (None, '') else (
+            'all' if key == 'connection' else '')
+        refresh_mqtt()
+
+    def toggle_follow():
+        state['following'] = not state['following']
+        refresh_mqtt()
+
+    def show_add_broker_dialog():
+        name = ui.input('Name', value='Broker').classes('w-full').props('outlined dense')
+        broker = ui.input('Broker', value='localhost').classes('w-full').props('outlined dense')
+        port = ui.input('Port', value='1883').classes('w-full').props('outlined dense')
+        topic_prefix = ui.input('Topic prefix', value='uartscope').classes('w-full').props('outlined dense')
+        username = ui.input('Username (optional)').classes('w-full').props('outlined dense')
+        password = ui.input('Password (optional)').classes('w-full').props('outlined dense').props('type=password')
+        with ui.dialog() as dialog, ui.card().classes('w-[420px] gap-2'):
+            ui.label('Add broker').classes('us-title')
+            for field in (name, broker, port, topic_prefix, username, password):
+                field.classes('w-full')
+            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                _btn('Cancel', 'us-btn-ghost', dialog.close)
+                _btn('Add', 'us-btn-primary', lambda: add_broker(
+                    name.value, broker.value, port.value,
+                    topic_prefix.value, username.value, password.value))
+
+    def add_broker(name, broker, port, topic_prefix, username, password):
         from app.core.mqtt_client import MQTTConnectionProfile
+        try:
+            port_num = int(port)
+        except (TypeError, ValueError):
+            ui.notify(f"'{port}' is not a valid port number", type='negative')
+            return
+        if not (name or '').strip() or not (broker or '').strip():
+            ui.notify('Name and broker are required', type='negative')
+            return
         profile = MQTTConnectionProfile(
-            name=name, broker=broker, port=port, topic_prefix=topic_prefix,
-            username=username, password=password,
+            name=(name or '').strip(), broker=(broker or '').strip(),
+            port=port_num, topic_prefix=(topic_prefix or 'uartscope').strip(),
+            username=username or None, password=password or None,
         )
         mqtt_manager.add_profile(profile)
-        dialog.close()
-        ui.notify(f"Broker '{name}' added", type='positive')
+        ui.notify(f"Broker '{profile.name}' added", type='positive')
         refresh_mqtt()
 
     async def connect_broker(profile):
@@ -2730,16 +3180,24 @@ def mqtt_page():
         refresh_mqtt()
 
     async def do_publish(profile_id, topic, payload):
+        if not profile_id:
+            ui.notify('No connected broker selected', type='negative')
+            return
         success = await mqtt_manager.publish(profile_id, topic, payload)
         if success:
-            ui.notify(f"Published to {topic}", type='positive')
+            ui.notify(f"Published to '{topic}'", type='positive')
         else:
-            ui.notify("Publish failed - not connected?", type='negative')
+            ui.notify('Publish failed — not connected?', type='negative')
 
-    # Poll for updates
+    _bind_mqtt_page('show_add_broker_dialog', show_add_broker_dialog)
+    _bind_mqtt_page('toggle_follow', toggle_follow)
+
     async def mqtt_refresh_loop():
         while True:
-            await asyncio.sleep(3)
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise
             refresh_mqtt()
 
     asyncio.create_task(mqtt_refresh_loop())
@@ -3474,6 +3932,100 @@ def _seed_demo_session():
         logger.exception('demo session seed failed')
 
 
+def _seed_demo_performance():
+    """Fill the performance tracker's history so the screen has a shape.
+
+    `_snapshot_loop` appends one snapshot every 5s from live traffic, so a
+    freshly started app has an empty history and the Performance screen would
+    render as a first-run empty state. A screenshot of that is not a
+    screenshot of the feature, and an empty analytics page is a poor first
+    impression of a screen that works.
+
+    60 snapshots -- 5 minutes at the tracker's own cadence -- written straight
+    in rather than generated over time, so a screenshot does not have to wait
+    five minutes for the page to fill. The shape is deliberate: a slow rise, a
+    latency spike, then recovery, so the spike handling and the trend glyphs
+    have something real to show.
+
+    Seeded with a fixed RNG so the screenshot is byte-reproducible.
+    """
+    import random
+
+    from app.core.performance_tracker import performance_tracker as _tracker
+
+    rng = random.Random(20260929)
+    base_pps, base_latency = 480.0, 4.2
+    history = []
+    for i in range(60):
+        phase = i / 59.0
+        pps = base_pps * (0.55 + 0.75 * min(phase * 1.4, 1.0))
+        spike = 0.62 < phase < 0.78
+        if spike:
+            pps *= 1.45
+        latency = base_latency + (0.9 if spike else 0.0) + rng.uniform(-0.4, 0.4)
+        history.append({
+            "timestamp": (datetime.now() - timedelta(
+                seconds=(59 - i) * 5)).isoformat(),
+            "connected_devices": 2 if phase < 0.9 else 1,
+            "total_bytes": int(i * 1_900 * rng.uniform(0.9, 1.1)),
+            "total_packets": int(i * 240 * rng.uniform(0.9, 1.1)),
+            "total_errors": 0 if phase < 0.62 else 2,
+            "current_packet_rate": round(max(pps, 0.0), 2),
+            "current_throughput": round(max(pps, 0.0) * rng.uniform(28, 34), 2),
+            "avg_latency_ms": round(max(latency, 0.1), 2),
+        })
+    _tracker._global_history = history
+
+    # The tiles, the latency histogram and the per-device section all read
+    # _device_perf, not the global history. Seeding only the history left every
+    # one of them showing zero or "no data", which made the first screenshot
+    # look like a half-built screen.
+    #
+    # Two devices with a real shape each: the primary board carries the
+    # latency spike seen in the history above, the second is quieter and
+    # accumulates the errors, so per-device comparison has something to
+    # compare. Latency is capped at 100 samples because that is the tracker's
+    # own cap, so the histogram and the p99 caption describe real data.
+    now = datetime.now()
+    for dev_id, name, pps, latency_base, errors, drop_at in [
+        ('demo-device', 'Demo board (USB-serial)', 430.0, 3.9, 0, None),
+        ('demo-device-2', 'Bench rig (CAN)', 96.0, 6.4, 2, 0.55),
+    ]:
+        perf = _tracker._device_perf.get(dev_id)
+        if perf is None:
+            from app.core.performance_tracker import DevicePerformance
+            perf = DevicePerformance(device_id=dev_id, device_name=name)
+            _tracker._device_perf[dev_id] = perf
+        perf.device_name = name
+        perf.connected_at = now - timedelta(minutes=47)
+        perf.disconnected_at = (
+            (now - timedelta(minutes=2)) if drop_at else None)
+        perf.total_packets = int(pps * 2800)
+        perf.total_bytes = int(pps * 2800 * rng.uniform(26, 32))
+        perf.error_count = errors
+        perf.checksum_errors = 1 if errors else 0
+        # current_packet_rate and current_throughput are read-only properties
+        # derived from the window counters over elapsed time, so they are set
+        # by seeding those counters -- assigning to the properties raises.
+        # A 10s window is what the tracker uses in production, so the seeded
+        # counters are pps * 10 and the elapsed time is a real 10s.
+        perf._window_start = time.time() - 10.0
+        perf._window_packets = int(pps * 10)
+        perf._window_bytes = int(pps * 10 * rng.uniform(26, 32))
+
+        # 100 latency samples, matching the tracker's cap. The second device
+        # runs hot and gets a tail of slow samples, so p95/p99 separate the
+        # two boards rather than both reading the same.
+        latencies = []
+        for k in range(100):
+            value = latency_base + rng.uniform(-0.5, 0.5)
+            if drop_at and k / 100.0 > drop_at:
+                value += 3.2 + rng.uniform(0, 1.4)
+            latencies.append(round(max(value, 0.2), 2))
+        perf.latencies = latencies
+
+
+
 @ui.page('/smoke/{tab}')
 def main_page(tab: str = 'devices', with_device: bool = False):
     """Build the shell.
@@ -3507,6 +4059,8 @@ def main_page(tab: str = 'devices', with_device: bool = False):
             sessions = get_sessions()
             if sessions:
                 selected_session = sessions[0]
+    if with_device and tab == 'performance':
+        _seed_demo_performance()
 
     # v2 design system: tokens + Inter/JetBrains Mono. Must run before any
     # screen is built so the first paint is already themed.

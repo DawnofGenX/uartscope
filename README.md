@@ -38,8 +38,10 @@ Node.js, no build step, no browser install.
 - The registry ships as a local manifest, not a hosted service. Set
   `UARTSCOPE_PLUGIN_REGISTRY` to an `http(s)` URL to point at a remote one;
   the manifest format is the same either way.
-- Two screens — **Performance** and **MQTT** — still show a "Not yet v2" pill;
-  they run the pre-v2 UI while the rest of the app was redesigned.
+- Every screen has been rebuilt to the v2 design treatment, so no screen
+  carries a "Not yet v2" marker. The Performance and MQTT screenshots are
+  taken against seeded demo data — a fixed seed, so the numbers in the image
+  are reproducible but are not measurements of your hardware.
 - There is **no baudrate auto-detection**. You set the baudrate; the app uses it.
 - Sessions are **not** created automatically when you start streaming. You
   create a session when you want one recorded.
@@ -101,8 +103,8 @@ service on :8080, while the UI is served on :3000.
 The long-form guides have been removed. What remains here:
 
 - **Quick start** (above) — the five-minute setup, including the no-hardware path
-- **What to know before you trust the screenshots** (above) — which features
-  are real and which are still pre-v2
+- **What to know before you trust the screenshots** (above) — what the screens
+  do and do not show
 - **Development** (below) — running the tests and the static gates
 
 The full guides are recoverable from the v2.0.1 tag if you want them:
