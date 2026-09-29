@@ -1089,17 +1089,18 @@ def terminal_page():
     search_input.on_value_change(lambda: _apply_search_filter())
     level_select.on_value_change(lambda: _apply_search_filter())
 
-    async def stream_loop():
+    # Captured here in the page body, where a NiceGUI slot is live.
+    # ui.notify() resolves the client through NiceGUI's context, and a bare
+    # asyncio task has no slot -- reading it as the first statement of the
+    # coroutine raised RuntimeError before the first await, killing the stream
+    # loop on its first tick and losing every notification it was meant to
+    # deliver. The loop is handed the client instead of fetching it.
+    _charts_stream_client = ui.context.client
+
+    async def stream_loop(client=_charts_stream_client):
         if not selected_device:
             return
         queue = asyncio.Queue()
-
-        # ui.notify() resolves the client through NiceGUI's context, and a bare
-        # asyncio task has no slot, so calling it from here raises RuntimeError
-        # and the message never reaches anyone. Capture the client while the
-        # page is still being built, where there IS a slot, and push straight
-        # to it afterwards.
-        client = ui.context.client
 
         async def on_data(line=""):
             await queue.put(line)
@@ -1495,11 +1496,18 @@ def charts_page():
         return '—'
 
     # ── Background update ────────────────────────────────────────────────
-    async def dashboard_refresh_loop():
-        # Captured while the page is being built. The loop runs detached, so
-        # ui.notify() below would raise RuntimeError and the user would get a
-        # frozen chart with no explanation.
-        client = ui.context.client
+    # Captured here, in the page body, where a NiceGUI slot is live. The
+    # refresh loop runs detached and has no slot, so it cannot read this itself.
+    _charts_client = ui.context.client
+
+    async def dashboard_refresh_loop(client):
+        # `client` is captured in the page body, not in here. The loop is
+        # detached -- asyncio.create_task() schedules it without the page-build
+        # slot -- and ui.context.client needs that slot, so reading it as the
+        # first statement of this coroutine raised RuntimeError before the
+        # first await. The refresh loop therefore died on its first tick and
+        # the chart silently froze: exactly the "frozen chart that looks live"
+        # the notify call was meant to warn about.
         while True:
             await asyncio.sleep(2)
             try:
@@ -1516,7 +1524,7 @@ def charts_page():
                 _notify(client, 'Chart refresh failed', type='negative')
                 return
 
-    asyncio.create_task(dashboard_refresh_loop())
+    asyncio.create_task(dashboard_refresh_loop(_charts_client))
     refresh_dashboard()
 
 def alerts_page():
@@ -1828,12 +1836,15 @@ def alerts_page():
     # Notify only. The queue itself re-renders on interaction; polling it every
     # 2s would fight the user mid-acknowledgement and rebuild the page under
     # their cursor.
-    async def check_new_alerts():
+    # Detached task: no slot, so ui.notify() would raise and the RuntimeError
+    # would be swallowed. Every alert would fire silently, which is the one
+    # outcome this screen cannot have. Captured here in the page body, where a
+    # slot exists -- the loop itself cannot read it, having been detached from
+    # the build.
+    _alerts_client = ui.context.client
+
+    async def check_new_alerts(client):
         last = len(get_alert_events())
-        # Detached task: no slot, so ui.notify() would raise and the RuntimeError
-        # would be swallowed. Every alert would fire silently, which is the one
-        # outcome this screen cannot have. Client captured at build time.
-        client = ui.context.client
         while True:
             await asyncio.sleep(2)
             try:
@@ -1854,7 +1865,7 @@ def alerts_page():
     _bind_alerts_page('show_add_rule_dialog', _show_add_rule_dialog_impl)
     _bind_alerts_page('toggle_acked', _toggle_acked_impl)
 
-    asyncio.create_task(check_new_alerts())
+    asyncio.create_task(check_new_alerts(_alerts_client))
     refresh_alerts()
 
 def sessions_page():
