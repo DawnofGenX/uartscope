@@ -81,6 +81,16 @@ jobs:
     needs: test
     if: github.event_name == 'release'
 
+    # The default GITHUB_TOKEN is read-only. "Attach to release" needs to write
+    # the .exe to the release, and without this it fails with
+    # "Resource not accessible by integration" AFTER the executable has
+    # already been built -- so the build succeeds, the upload does not, and
+    # the release ships with no binary and no obvious reason why.
+    #
+    # Scoped to this job: the test and docker jobs need nothing but read.
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
 
