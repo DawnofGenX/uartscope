@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 import types
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
@@ -3484,6 +3484,49 @@ def _seed_demo_session():
         logger.exception('demo session seed failed')
 
 
+def _seed_demo_performance():
+    """Fill the performance tracker's history so the screen has a shape.
+
+    `_snapshot_loop` appends one snapshot every 5s from live traffic, so a
+    freshly started app has an empty history and the Performance screen would
+    render as a first-run empty state. A screenshot of that is not a
+    screenshot of the feature, and an empty analytics page is a poor first
+    impression of a screen that works.
+
+    60 snapshots -- 5 minutes at the tracker's own cadence -- written straight
+    in rather than generated over time, so a screenshot does not have to wait
+    five minutes for the page to fill. The shape is deliberate: a slow rise, a
+    latency spike, then recovery, so the spike handling and the trend glyphs
+    have something real to show.
+
+    Seeded with a fixed RNG so the screenshot is byte-reproducible.
+    """
+    import random
+
+    rng = random.Random(20260929)
+    base_pps, base_latency = 480.0, 4.2
+    history = []
+    for i in range(60):
+        phase = i / 59.0
+        pps = base_pps * (0.55 + 0.75 * min(phase * 1.4, 1.0))
+        spike = 0.62 < phase < 0.78
+        if spike:
+            pps *= 1.45
+        latency = base_latency + (0.9 if spike else 0.0) + rng.uniform(-0.4, 0.4)
+        history.append({
+            "timestamp": (datetime.now() - timedelta(
+                seconds=(59 - i) * 5)).isoformat(),
+            "connected_devices": 2 if phase < 0.9 else 1,
+            "total_bytes": int(i * 1_900 * rng.uniform(0.9, 1.1)),
+            "total_packets": int(i * 240 * rng.uniform(0.9, 1.1)),
+            "total_errors": 0 if phase < 0.62 else 2,
+            "current_packet_rate": round(max(pps, 0.0), 2),
+            "current_throughput": round(max(pps, 0.0) * rng.uniform(28, 34), 2),
+            "avg_latency_ms": round(max(latency, 0.1), 2),
+        })
+    performance_tracker._global_history = history
+
+
 @ui.page('/smoke/{tab}')
 def main_page(tab: str = 'devices', with_device: bool = False):
     """Build the shell.
@@ -3517,6 +3560,8 @@ def main_page(tab: str = 'devices', with_device: bool = False):
             sessions = get_sessions()
             if sessions:
                 selected_session = sessions[0]
+    if with_device and tab == 'performance':
+        _seed_demo_performance()
 
     # v2 design system: tokens + Inter/JetBrains Mono. Must run before any
     # screen is built so the first paint is already themed.
