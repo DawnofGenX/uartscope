@@ -45,7 +45,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   otherwise flatten to strings, and CSV values are quoted properly, so a metric
   containing a comma no longer splits into two columns.
 
+### Changed
+
+- **Performance and MQTT rebuilt to v2.** These were the last two screens on
+  the v1 treatment, and both were quietly broken in the same way: each rebuilt
+  its entire UI every 3 seconds without clearing the container, so the page
+  grew without bound for as long as it was open. Both now clear and explicitly
+  re-enter their container, matching every other screen, and a contract test
+  guards that.
+
+  Performance v1 never called `get_history()`, so the tracker kept a full hour
+  of packet-rate, throughput and latency snapshots that nothing displayed. v2
+  surfaces it: stat tiles carry a sparkline and a trend, a selectable
+  1m/5m/15m/all window plots the real history, the latency distribution gains
+  p50/p95/p99 markers, and per-device rows carry sparklines. The window caption
+  states how many samples are on screen and warns when density has flattened
+  the block ramp.
+
+  MQTT keeps every capability it had — broker management, subscriptions,
+  publish, history — with subscriptions grouped by the connection carrying them
+  and history filterable by connection and topic, pausable, with a
+  jump-to-newest follow mode. Nothing that worked was removed.
+
+  `V2_PENDING` is now empty, so no screen carries a "Not yet v2" marker.
+
 ### Fixed
+
+- **`POST /api/protocols/encode` returned 500 for an integer `can_id`.**
+  `CANDecoder.encode` parsed the id with a base of 16 unconditionally, so
+  `{"can_id": 256}` raised `TypeError: int() can't convert non-string with
+  explicit base` while `"0x100"` worked — the more natural JSON input was the
+  one that failed. `DBCDecoder.encode` had a related guard that protected only
+  the string path and let the same unguarded call through for an int. Both
+  accept hex strings, decimal strings and ints now. This is the "generic CAN
+  encode returns HTTP 500" loose end carried since v2.0.1.
 
 - **Plugin installs were lost on restart.** `PluginRegistry` wrote its state
   file but never read it, so a new instance reported nothing installed even
