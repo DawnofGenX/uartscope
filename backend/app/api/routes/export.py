@@ -8,6 +8,7 @@ from typing import Optional
 
 from app.core.telemetry_engine import telemetry_engine
 from app.core.session_recorder import session_recorder
+from app.core.session_bundle import build_bundle, describe_bundle
 
 router = APIRouter(prefix="/export", tags=["export"])
 
@@ -91,3 +92,37 @@ async def export_session_json(session_id: str):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@router.get("/session/{session_id}/bundle")
+async def export_session_bundle(session_id: str):
+    """Export a session as a .uartscope bundle.
+
+    The bundle is the shareable capture format: a zip of session.json,
+    packets.json and metrics.csv. It was previously only producible from the
+    desktop UI, which assembled it in memory; this route uses the same shared
+    builder so a script or another client can export one too.
+    """
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    session = await session_recorder.load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # A session is stored with its metrics as a flat list of samples; the bundle
+    # wants them grouped by metric name, which is what the CSV rows key on.
+    metrics_by_name: dict = {}
+    for sample in session.get("metrics", []) or []:
+        name = sample.get("name") or "unnamed"
+        metrics_by_name.setdefault(name, []).append(
+            {k: v for k, v in sample.items() if k != "name"})
+
+    blob = build_bundle(session, session.get("packets", []),
+                        metrics_by_name, session.get("events", []))
+    meta = describe_bundle(session)
+    return Response(
+        content=blob,
+        media_type=meta["media_type"],
+        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
+    )

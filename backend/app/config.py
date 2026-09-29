@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     sessions_dir: str = "./sessions"
     max_session_size_mb: int = 500
 
+    # Plugin marketplace
+    # Where the registry manifest lives. A path or http(s) URL; a path is
+    # resolved against the packaged `registry/` directory by default. Empty
+    # disables the marketplace, and the API says so rather than showing an
+    # empty list that looks like a broken registry.
+    plugin_registry: str = ""
+    plugin_install_dir: str = "./plugins"
+    # Installing a plugin runs third-party Python in this process. There is no
+    # sandbox, so this stays off unless the operator turns it on deliberately.
+    plugin_install_enabled: bool = True
+
     # MQTT
     mqtt_enabled: bool = False
     mqtt_broker: str = "localhost"

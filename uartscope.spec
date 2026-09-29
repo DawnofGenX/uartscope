@@ -5,7 +5,16 @@ a = Analysis(
     ['run_desktop.py'],
     pathex=[],
     binaries=[],
-    datas=[('backend', 'app'), ('desktop_app.py', '.'), ('launch.py', '.')],
+    datas=[
+        ('backend', 'app'),
+        ('desktop_app.py', '.'),
+        ('launch.py', '.'),
+        # The plugin registry. Without this a packaged app has no manifest, and
+        # `default_registry_path()` finds nothing, so the Marketplace reports
+        # "no registry configured" and the bundled LIN/J1939/DALI decoders are
+        # missing from a build that otherwise contains them.
+        ('registry', 'registry'),
+    ],
     hiddenimports=['uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'nicegui', 'nicegui.ui', 'nicegui.page', 'nicegui.context', 'nicegui.events', 'nicegui.settings', 'starlette', 'starlette.applications', 'starlette.middleware', 'starlette.requests', 'starlette.responses', 'starlette.routing', 'starlette.staticfiles', 'starlette.websockets', 'fastapi', 'fastapi.middleware', 'fastapi.staticfiles', 'pydantic', 'pydantic.fields', 'pydantic.main', 'sqlalchemy', 'sqlalchemy.ext.asyncio', 'sqlalchemy.pool', 'aiosqlite', 'serial', 'serial.tools', 'serial.tools.list_ports', 'aiofiles'],
     hookspath=[],
     hooksconfig={},

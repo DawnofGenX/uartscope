@@ -29,6 +29,13 @@ Thumbs.db
 sessions/
 uartscope.db
 
+# Installed plugins and the record of what is installed. Both are per-machine
+# state: a plugin is third-party code the user chose to install, and the state
+# file is rewritten on every change. The `registry/` directory IS tracked --
+# that is the shipped catalogue.
+plugins/
+plugin_state.json
+
 # Hermes planning artifacts. Local working notes and one-shot migration
 # scripts, not part of the product.
 .hermes/

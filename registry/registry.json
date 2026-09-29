@@ -1,0 +1,37 @@
+{
+  "registry_version": 1,
+  "updated": "2026-09-28",
+  "note": "Plugin manifest for UARTScope Pro. `module` is resolved relative to this file. Point UARTSCOPE_PLUGIN_REGISTRY at a URL to use a hosted registry instead of this bundled one.",
+  "plugins": [
+    {
+      "id": "lin_ldf",
+      "name": "LIN Bus (LDF)",
+      "version": "1.0.0",
+      "author": "UARTScope Community",
+      "description": "LIN bus frames: frame ID, protected PID, 1-8 data bytes, and a checksum check. Signal mapping for five common LDF frames.",
+      "tags": ["automotive", "lin", "can-lin"],
+      "module": "lin_ldf.py",
+      "class": "LinLdfDecoder"
+    },
+    {
+      "id": "j1939",
+      "name": "J1939 (Heavy Duty)",
+      "version": "1.1.0",
+      "author": "UARTScope Community",
+      "description": "SAE J1939 for trucks, buses and agricultural vehicles. PGN-based message parsing with source-address and priority extraction.",
+      "tags": ["automotive", "j1939", "truck"],
+      "module": "j1939.py",
+      "class": "J1939Decoder"
+    },
+    {
+      "id": "dali",
+      "name": "DALI Lighting",
+      "version": "0.9.0",
+      "author": "UARTScope Community",
+      "description": "DALI / DALI-2 lighting control. Forward and backward frames, broadcast, group and scene addressing.",
+      "tags": ["lighting", "dali", "iot"],
+      "module": "dali.py",
+      "class": "DaliDecoder"
+    }
+  ]
+}

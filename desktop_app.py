@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 import types
 import uuid
 from datetime import datetime
@@ -25,6 +26,7 @@ from uartscope_theme import (
 from app.core.device_manager import device_manager
 from app.core.telemetry_engine import telemetry_engine, Metric
 from app.core.session_recorder import session_recorder
+from app.core.session_bundle import build_bundle, describe_bundle
 from app.core.alert_engine import alert_engine, AlertRule
 from app.core.serial_reader import serial_reader
 from app.core.websocket_hub import ws_manager
@@ -161,7 +163,8 @@ NAV_TAB_IDS = {tid for tid, *_ in NAV_ITEMS}
 
 # Screens still on the v1 treatment. Surfaced in the release notes as not-yet-v2
 # rather than hidden, so the nav is honest about what has been redesigned.
-V2_PENDING = {'performance', 'mqtt', 'marketplace'}
+# marketplace is no longer listed here: it drives the real plugin registry
+V2_PENDING = {'performance', 'mqtt'}
 
 
 def nav_label(tab_id):
@@ -1984,34 +1987,14 @@ def _export_bundle(packets, metrics_by_name, events, session=None):
     """A .uartscope bundle: the shareable capture.
 
     Unlike the JSON and CSV exports this includes the raw packets, which is the
-    only reason the format exists.
+    only reason the format exists. The zip is assembled by the shared builder
+    so the format is defined once; the API route uses the same code.
     """
-    import io
-    import zipfile
-    descriptor = {
-        'version': '2.0',
-        'type': 'uartscope-session',
-        'session': (session or selected_session or {}),
-        'metrics': metrics_by_name,
-        'packet_count': len(packets),
-        'event_count': len(events),
-    }
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('session.json', json.dumps(descriptor, indent=2, default=str))
-        zf.writestr('packets.json', json.dumps(packets, indent=2, default=str))
-        csv_out = io.StringIO()
-        csv_out.write('timestamp,metric,value,unit\n')
-        for name, history in metrics_by_name.items():
-            for m in history:
-                csv_out.write(
-                    f"{m.get('timestamp') or m.get('ts','')},"
-                    f"{name},{m.get('value')},{m.get('unit') or ''}\n")
-        zf.writestr('metrics.csv', csv_out.getvalue())
-    sid = ((session or selected_session or {}).get('id') or 'unknown')[:8]
-    filename = f'session_{sid}.uartscope'
-    ui.download.bytes(buffer.getvalue(), filename)
-    ui.notify(f'Exported {filename}', type='positive')
+    blob = build_bundle(session or selected_session or {}, packets,
+                        metrics_by_name, events)
+    meta = describe_bundle(session or selected_session or {})
+    ui.download.bytes(blob, meta['filename'])
+    ui.notify(f"Exported {meta['filename']}", type='positive')
 
 
 def _diff_tab(session, packets, metrics_by_name):
@@ -2764,72 +2747,41 @@ def mqtt_page():
 
 
 def marketplace_page():
-    """Plugin Marketplace - browse, install, and share protocol decoder plugins."""
-    # Built-in catalog (would be fetched from GitHub in production)
-    catalog = [
-        {
-            'id': 'ldf_decoder',
-            'name': 'LIN Bus (LDF)',
-            'author': 'UARTScope Community',
-            'description': 'Decode LIN bus frames using .ldf database files. Supports LIN 1.3-2.2, signal mapping, and schedule tables.',
-            'version': '1.0.0',
-            'downloads': 1240,
-            'tags': ['automotive', 'lin', 'can-lin'],
-            'installed': False,
-        },
-        {
-            'id': 'j1939_decoder',
-            'name': 'J1939 (Heavy Duty)',
-            'author': 'UARTScope Community',
-            'description': 'SAE J1939 protocol decoder for trucks, buses, and agricultural vehicles. PGN-based message parsing.',
-            'version': '1.1.0',
-            'downloads': 890,
-            'tags': ['automotive', 'j1939', 'truck'],
-            'installed': False,
-        },
-        {
-            'id': 'dali_decoder',
-            'name': 'DALI Lighting',
-            'author': 'UARTScope Community',
-            'description': 'DALI / DALI-2 lighting control protocol decoder. Supports broadcast, group addressing, and scene commands.',
-            'version': '0.9.0',
-            'downloads': 567,
-            'tags': ['lighting', 'dali', 'iot'],
-            'installed': False,
-        },
-        {
-            'id': 'rcs_decoder',
-            'name': 'RCS Servo',
-            'author': 'UARTScope Community',
-            'description': 'Futaba S.Bus / S.Bus2 and FrSky servo protocol decoder. Channel extraction and failsafe detection.',
-            'version': '1.0.0',
-            'downloads': 723,
-            'tags': ['rc', 'servo', 'fpv'],
-            'installed': False,
-        },
-        {
-            'id': 'mbus_decoder',
-            'name': 'M-Bus Metering',
-            'author': 'UARTScope Community',
-            'description': 'Meter-Bus (EN 13757) decoder for heat, gas, water, and electricity meters. Variable data format parsing.',
-            'version': '1.0.0',
-            'downloads': 445,
-            'tags': ['metering', 'mbus', 'iot'],
-            'installed': False,
-        },
-        {
-            'id': 'profibus_decoder',
-            'name': 'PROFIBUS DP',
-            'author': 'UARTScope Pro',
-            'description': 'PROFIBUS DP-V0/V1 decoder for industrial automation. SAP handling and diagnostic messages.',
-            'version': '1.0.0',
-            'downloads': 312,
-            'tags': ['industrial', 'profibus', 'plc'],
-            'installed': False,
-        },
-    ]
+    """Plugin Marketplace - install community protocol decoders.
 
-    installed_plugins = [p for p in catalog if p['installed']]
+    This screen used to render a hardcoded list of six plugins with invented
+    download counts, and its Install button slept for a second then set a flag.
+    Nothing was downloaded and no decoder was ever registered: the plugin was a
+    picture of a feature.
+
+    It now drives the real registry. The catalog comes from
+    `registry/registry.json` (or whatever `UARTSCOPE_PLUGIN_REGISTRY` points at),
+    Install validates the module and registers its decoder with the live
+    `protocol_manager`, and Uninstall unregisters it. What the screen shows is
+    what the decoder table actually contains.
+    """
+    from app.core.plugin_registry import (
+        PluginRegistry, PluginValidationError, default_registry_path)
+    from app.config import settings
+
+    # One registry per page build, wired to the same decoder manager the rest of
+    # the app uses, so an installed plugin is immediately usable everywhere.
+    install_dir = Path(settings.plugin_install_dir)
+    registry = PluginRegistry(
+        manager=protocol_manager,
+        install_dir=install_dir,
+        state_file=install_dir.parent / 'plugin_state.json',
+    )
+    manifest_path = settings.plugin_registry or str(default_registry_path() or '')
+    registry_error = None
+    if manifest_path:
+        try:
+            registry.fetch_manifest(Path(manifest_path))
+        except (PluginValidationError, OSError) as exc:
+            registry_error = str(exc)
+    else:
+        registry_error = 'No plugin registry is configured or bundled.'
+
     search_state = {'query': ''}
 
     with ui.column().classes('w-full gap-4'):
@@ -2837,45 +2789,71 @@ def marketplace_page():
         with ui.row().classes('w-full items-center justify-between mb-3'):
             with ui.column():
                 ui.label('Plugin Marketplace').classes('text-white font-medium text-lg')
-                ui.label('Browse and install community protocol decoders').classes('text-[#52525b] text-sm')
+                ui.label('Install community protocol decoders').classes('text-[#52525b] text-sm')
             with ui.row().classes('gap-2 mt-1'):
-                ui.label(f'{len(installed_plugins)} installed').classes('text-[#22c55e] text-xs font-mono')
+                ui.label(f"{len(registry.list_installed())} installed").classes('text-[#22c55e] text-xs font-mono')
+
+        if registry_error:
+            with ui.card().classes('w-full p-4').style('background: rgba(229,72,77,0.06); border: 1px solid rgba(229,72,77,0.25)'):
+                ui.label('Registry unavailable').classes('text-[#ef4444] text-sm font-medium')
+                ui.label(registry_error).classes('text-[#a1a1aa] text-xs mt-1')
+
+        # What installing actually does, stated once rather than hidden in a
+        # dialog nobody reads.
+        with ui.card().classes('w-full p-3').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06)'):
+            ui.label('Before you install').classes('text-[#e4e4e7] text-xs font-medium')
+            ui.label(
+                'A plugin is Python that runs inside this process and is called on '
+                'live traffic. It is not sandboxed. Install only decoders whose '
+                'source you have read.'
+            ).classes('text-[#71717a] text-xs mt-1 leading-relaxed')
 
         # Search bar
         search_input = ui.input('Search plugins...', placeholder='Search by name, tag, or description').classes('w-full').props('outlined dense').style('color: #e4e4e7')
-        search_input.on_value_change(lambda: refresh_catalog())
+        search_input.on_value_change(lambda _event: refresh_catalog())
 
         # Installed section
-        if installed_plugins:
+        installed_now = registry.list_installed()
+        if installed_now:
             with ui.card().classes('w-full p-4').style('background: rgba(255,255,255,0.02); border: 1px solid rgba(39,166,68,0.2)'):
-                ui.label('✅ Installed Plugins').classes('text-white font-medium mb-3')
+                ui.label('Installed').classes('text-white font-medium mb-3')
                 with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
-                    for plugin in installed_plugins:
+                    for plugin in installed_now:
                         with ui.row().classes('w-full items-center justify-between p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
                             with ui.row().classes('items-center gap-2'):
                                 ui.label('📦').classes('text-sm')
                                 with ui.column().classes('gap-0'):
-                                    ui.label(plugin['name']).classes('text-[#e4e4e7] text-sm font-medium')
-                                    ui.label(f"v{plugin['version']} · {plugin['author']}").classes('text-[#52525b] text-xs')
+                                    ui.label(plugin.name).classes('text-[#e4e4e7] text-sm font-medium')
+                                    ui.label(f"v{plugin.version} · {plugin.author}").classes('text-[#52525b] text-xs')
                             with ui.row().classes('gap-2 mt-1'):
-                                ui.label('Installed').classes('text-[#22c55e] text-xs')
-                                ui.button('Uninstall', on_click=lambda p=plugin: uninstall_plugin(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#ef4444] px-2 py-0.5 text-xs rounded')
+                                ui.label('Active').classes('text-[#22c55e] text-xs')
+                                # See the Install button above: the event
+                                # arrives positionally, so the plugin id is
+                                # bound to a keyword-only parameter.
+                                ui.button('Uninstall', on_click=lambda _pid=plugin.plugin_id: uninstall_plugin(_pid)).classes('bg-[rgba(229,72,77,0.1)] text-[#ef4444] px-2 py-0.5 text-xs rounded')
 
         # Catalog grid
         catalog_container = ui.column().classes('w-full gap-4 p-6 max-w-[1400px] mx-auto')
 
     def refresh_catalog():
-        query = search_input.value.lower().strip() if search_input.value else ''
+        query = (search_input.value or '').lower().strip()
         catalog_container.clear()
+        catalog = registry.list_available()
 
         filtered = catalog
         if query:
             filtered = [p for p in catalog if
-                        query in p['name'].lower() or
-                        query in p['description'].lower() or
-                        any(query in t for t in p['tags'])]
+                        query in (p.get('name') or '').lower() or
+                        query in (p.get('description') or '').lower() or
+                        any(query in t for t in (p.get('tags') or []))]
 
-        if not filtered:
+        if registry_error:
+            with catalog_container:
+                with ui.card().classes('w-full p-12 text-center').style('background: #16181d; border-left: 2px solid #5c8af0'):
+                    ui.label('📡').classes('text-3xl mb-2')
+                    ui.label('No registry to browse').classes('text-[#e4e4e7] font-medium')
+                    ui.label(registry_error).classes('text-[#52525b] text-sm')
+        elif not filtered:
             with catalog_container:
                 with ui.card().classes('w-full p-12 text-center').style('background: #16181d; border-left: 2px solid #5c8af0'):
                     ui.label('🔍').classes('text-3xl mb-2')
@@ -2888,31 +2866,50 @@ def marketplace_page():
                         with ui.row().classes('w-full items-start justify-between'):
                             with ui.column().classes('gap-1 flex-1'):
                                 with ui.row().classes('items-center gap-2'):
-                                    ui.label(plugin['name']).classes('text-white font-medium text-sm')
-                                    ui.label(f"v{plugin['version']}").classes('text-[#52525b] text-xs font-mono')
-                                ui.label(plugin['description']).classes('text-[#71717a] text-xs leading-relaxed')
+                                    ui.label(plugin.get('name') or plugin['id']).classes('text-white font-medium text-sm')
+                                    ui.label(f"v{plugin.get('version', '0.0.0')}").classes('text-[#52525b] text-xs font-mono')
+                                ui.label(plugin.get('description') or '').classes('text-[#71717a] text-xs leading-relaxed')
                                 with ui.row().classes('gap-1 mt-1'):
-                                    for tag in plugin['tags']:
+                                    for tag in (plugin.get('tags') or []):
                                         ui.label(tag).classes('text-[#5c8af0] text-[10px] bg-[rgba(113,112,255,0.1)] px-1.5 py-0.5 rounded')
-                                ui.label(f"by {plugin['author']} · {plugin['downloads']:,} downloads").classes('text-[#52525b] text-[10px] mt-1')
+                                # No download count: this registry serves no
+                                # telemetry, so any number here would be invented.
+                                ui.label(f"by {plugin.get('author', 'unknown')}").classes('text-[#52525b] text-[10px] mt-1')
                             with ui.column().classes('gap-2 items-end'):
-                                if plugin['installed']:
+                                if plugin.get('installed'):
                                     ui.label('✅ Installed').classes('text-[#22c55e] text-xs')
                                 else:
-                                    ui.button('Install', on_click=lambda p=plugin: install_plugin(p)).classes('bg-[#5c6fd0] text-white px-3 py-1 text-xs rounded-lg')
+                                    # NiceGUI passes the click event as a
+                                    # positional argument, so a `lambda p=<id>`
+                                    # default would be overwritten by the event
+                                    # and the id lost. The id is captured in a
+                                    # keyword-only parameter, which the event
+                                    # cannot fill.
+                                    ui.button('Install', on_click=lambda _pid=plugin['id']: install_plugin(_pid)).classes('bg-[#5c6fd0] text-white px-3 py-1 text-xs rounded-lg')
 
-    async def install_plugin(plugin):
-        ui.notify(f"Installing '{plugin['name']}'...", type='info')
-        # Simulate install (in production: download from GitHub repo)
-        await asyncio.sleep(1)
-        plugin['installed'] = True
-        plugin['downloads'] += 1
-        ui.notify(f"✅ '{plugin['name']}' installed! Restart to activate.", type='positive')
+    async def install_plugin(plugin_id):
+        """Install for real, and report exactly what happened.
+
+        The old version slept a second, set a boolean, and told the user to
+        restart. A plugin that fails to validate has to say so here rather than
+        appearing to succeed.
+        """
+        ui.notify(f"Installing '{plugin_id}'...", type='info')
+        try:
+            record = await registry.install(plugin_id, source_root=Path(manifest_path).parent)
+        except (PluginValidationError, KeyError, OSError, ImportError) as exc:
+            ui.notify(f"Install failed: {exc}", type='negative')
+            return
+        ui.notify(f"'{record.name}' installed and active", type='positive')
         refresh_catalog()
 
-    async def uninstall_plugin(plugin):
-        plugin['installed'] = False
-        ui.notify(f"'{plugin['name']}' uninstalled", type='info')
+    async def uninstall_plugin(plugin_id):
+        try:
+            await registry.uninstall(plugin_id)
+        except KeyError:
+            ui.notify(f"'{plugin_id}' was not installed", type='warning')
+            return
+        ui.notify(f"'{plugin_id}' uninstalled", type='info')
         refresh_catalog()
 
     refresh_catalog()
