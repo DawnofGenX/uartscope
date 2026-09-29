@@ -161,10 +161,10 @@ NAV_ITEMS = [
 
 NAV_TAB_IDS = {tid for tid, *_ in NAV_ITEMS}
 
-# Screens still on the v1 treatment. Surfaced in the release notes as not-yet-v2
-# rather than hidden, so the nav is honest about what has been redesigned.
-# marketplace is no longer listed here: it drives the real plugin registry
-V2_PENDING = {'performance', 'mqtt'}
+# Every screen has been rebuilt to the v2 treatment, so the "Not yet v2" pill
+# no longer has anything to mark. Kept as an empty set rather than deleted: the
+# header still reads it, and a future screen can opt back in explicitly.
+V2_PENDING = set()
 
 
 def nav_label(tab_id):
@@ -2824,125 +2824,324 @@ def performance_page():
 
 
 def mqtt_page():
+    """MQTT: broker connections, subscriptions, and the message stream.
 
+    v1's capabilities were fine; its layout was not. Everything worked --
+    add/connect/disconnect/delete a broker, subscribe and unsubscribe topics,
+    publish, read the last 50 messages -- but it presented all of it in the old
+    treatment while the rest of the app was rebuilt around a different set of
+    ideas: a device is a first-class object with a status dot, a topic belongs
+    to the connection carrying it, and an empty state is something you design
+    rather than a grey label.
+
+    v2 keeps all of that and fixes three things v1 got wrong:
+
+      * Subscriptions were a flat list, so a topic was not visibly attached to
+        the broker that carries it. They are grouped by connection now.
+      * Message history had no filter, so with more than one broker you could
+        not tell whose traffic you were reading. It filters by connection and
+        topic now, and follows the newest message unless paused.
+      * refresh_mqtt rebuilt the whole page every 3s without clearing the
+        container, so the page grew without bound for as long as it was open.
+    """
     _bind_mqtt_page, _late_mqtt_page = _late_bindings()
-    """MQTT Integration - broker connections, subscriptions, message history."""
     import time as _time
 
+    # Message history is a bounded ring in the manager (1000). 200 is a
+    # readable page that still shows a session's shape; the selector is there
+    # because someone debugging a burst wants the other end of the range.
+    LIMITS = [('50', 50), ('200', 200), ('1000', 1000)]
+    state = {'limit': 200, 'connection': 'all', 'topic': '', 'following': True}
+
+    def _selected_messages():
+        """History filtered by connection and topic substring.
+
+        The manager owns the ring and the 1000-message cap; this only narrows
+        what is displayed, and says so in the caption when it has.
+        """
+        limit = int(state['limit'])
+        msgs = mqtt_manager.get_message_history(limit=limit)
+        conn = state['connection']
+        topic = (state['topic'] or '').lower()
+        out = []
+        for m in msgs:
+            if conn != 'all' and m.connection_id != conn:
+                continue
+            if topic and topic not in (m.topic or '').lower():
+                continue
+            out.append(m)
+        return out, limit
+
+    mqtt_container = ui.column().classes('w-full gap-5')
+
     def refresh_mqtt():
+        # clear() leaves the ambient context on a deleted slot; rebuild inside
+        # an explicit `with` so the ambient slot is valid again.
+        mqtt_container.clear()
+
         profiles = mqtt_manager.get_all_profiles()
         stats = mqtt_manager.get_stats()
-        messages = mqtt_manager.get_message_history(limit=50)
+        messages, limit = _selected_messages()
 
-        # Stats bar
-        with ui.row().classes('w-full gap-3 mb-4'):
-            for label, val, color in [
-                ('Connections', f"{stats.get('connected', 0)}/{stats.get('total_connections', 0)}", '#5c8af0'),
-                ('Messages', str(stats.get('total_messages', 0)), '#22c55e'),
-                ('Data', format_bytes(stats.get('total_bytes', 0)), '#eab308'),
-                ('History', str(stats.get('history_size', 0)), '#71717a'),
-            ]:
-                with ui.card().classes('flex-1 p-4') \
-                    .style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label(str(val)).classes('text-lg font-medium font-mono').style(f'color: {color}')
-                    ui.label(label).classes('text-[10px] text-[#71717a] uppercase tracking-widest')
+        with mqtt_container:
+            with ui.row().classes('w-full items-center justify-between'):
+                with ui.column().classes('gap-1'):
+                    ui.label('MQTT').classes('us-title')
+                    ui.label('Broker connections and the message stream').classes(
+                        'us-caption us-muted')
+                with ui.row().classes('items-center gap-2'):
+                    ui.label('Updates every 3s').classes('us-micro us-muted')
+                    _btn('+ Add broker', 'us-btn-primary',
+                         _late_mqtt_page('show_add_broker_dialog'))
 
-        # Connection profiles
-        with ui.card().classes('w-full p-4 mb-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            with ui.row().classes('w-full items-center justify-between mb-3'):
-                ui.label('Broker Connections').classes('text-white font-medium')
-                ui.button('+ Add Broker', on_click=_late_mqtt_page('show_add_broker_dialog')).classes('bg-[#5c6fd0] text-white px-3 py-1 text-sm rounded-lg')
+            # ── Stat tiles ──────────────────────────────────────────────
+            with ui.row().classes('w-full gap-3 flex-wrap'):
+                for label, value, unit in [
+                    ('Connections',
+                     f"{stats.get('connected', 0)}/{stats.get('total_connections', 0)}",
+                     ''),
+                    ('Messages', f"{stats.get('total_messages', 0):,}", ''),
+                    ('Data', format_bytes(stats.get('total_bytes', 0)), ''),
+                    ('Buffered', f"{stats.get('history_size', 0):,}", '/1000'),
+                ]:
+                    with ui.column().classes('us-card flex-1 gap-1 min-w-[140px] !p-4'):
+                        ui.label(label).classes('us-label us-muted')
+                        with ui.row().classes('items-baseline gap-1'):
+                            ui.label(value).classes('us-metric us-mono')
+                            if unit:
+                                ui.label(unit).classes('us-unit')
 
-            if not profiles:
-                ui.label('No MQTT connections configured').classes('text-[#52525b] text-sm py-4')
-            else:
-                with ui.column().classes('w-full gap-3 p-6 max-w-[1400px] mx-auto'):
+            # ── Brokers ─────────────────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                ui.label('Connections').classes('us-subhead')
+                if not profiles:
+                    with ui.column().classes('us-empty w-full'):
+                        with ui.column().classes('gap-2'):
+                            ui.label('No brokers configured').classes('us-display')
+                            ui.label(
+                                'Add a broker to subscribe to topics and watch '
+                                'messages arrive here.'
+                            ).classes('us-body')
+                        _btn('+ Add broker', 'us-btn-primary',
+                             _late_mqtt_page('show_add_broker_dialog'))
+                else:
                     for profile in profiles:
-                        with ui.card().classes('w-full p-3').style('background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.06)'):
-                            with ui.row().classes('w-full items-center justify-between mb-3'):
-                                with ui.row().classes('items-center gap-3'):
-                                    sc = '#22c55e' if profile.connected else '#52525b'
-                                    ui.label(' ').classes('inline-block w-2 h-2 rounded-full').style(f'background: {sc}')
-                                    with ui.column().classes('gap-0.5'):
-                                        ui.label(profile.name).classes('text-white font-medium text-sm')
-                                        ui.label(f"{profile.broker}:{profile.port}").classes('text-[#52525b] text-xs font-mono')
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.label(f"{profile.messages_received} msgs").classes('text-[#52525b] text-xs font-mono')
+                        with ui.column().classes('us-row w-full gap-2 !py-2'):
+                            with ui.row().classes('w-full items-center gap-3'):
+                                with ui.row().classes(
+                                        'items-center gap-2 flex-1 min-w-0'):
+                                    ui.label(' ').classes(
+                                        f"us-dot {'us-dot-live' if profile.connected else 'us-dot-idle'}")
+                                    with ui.column().classes('gap-0 min-w-0'):
+                                        ui.label(profile.name).classes(
+                                            'us-body us-truncate')
+                                        ui.label(
+                                            f"{profile.broker}:{profile.port}"
+                                        ).classes('us-micro us-muted us-mono')
+                                with ui.row().classes('items-baseline gap-3'):
+                                    ui.label(f"{profile.messages_received:,}").classes(
+                                        'us-micro us-mono')
+                                    ui.label('msgs').classes('us-micro us-muted')
+                                    if profile.last_error:
+                                        ui.label(profile.last_error).classes(
+                                            'us-micro us-truncate').style(
+                                            'max-width:220px;color:var(--us-status-error,#ef4444)')
+                                with ui.row().classes('items-center gap-1'):
                                     if profile.connected:
-                                        ui.button('Disconnect', on_click=lambda p=profile: disconnect_broker(p)).classes('bg-[#ef4444] text-white px-2 py-0.5 text-xs rounded')
+                                        _btn('Disconnect', 'us-btn-danger',
+                                             lambda p=profile: disconnect_broker(p))
                                     else:
-                                        ui.button('Connect', on_click=lambda p=profile: connect_broker(p)).classes('bg-[#22c55e] text-white px-2 py-0.5 text-xs rounded')
-                                    ui.button('Delete', on_click=lambda p=profile: delete_broker(p)).classes('bg-[rgba(229,72,77,0.1)] text-[#ef4444] px-2 py-0.5 text-xs rounded')
+                                        _btn('Connect', 'us-btn-secondary',
+                                             lambda p=profile: connect_broker(p))
+                                    _btn('Delete', 'us-btn-ghost',
+                                         lambda p=profile: delete_broker(p))
 
-        # Subscriptions + Publish panel
-        if profiles:
-            with ui.row().classes('w-full gap-3 mb-4'):
-                # Subscriptions
-                with ui.card().classes('flex-1 p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label('Subscriptions').classes('text-white font-medium mb-2')
-                    with ui.column().classes('w-full gap-0.5'):
+            # ── Subscriptions, grouped by the connection carrying them ──
+            if profiles:
+                subscribed = [(p, t) for p in profiles
+                              for t in (p.subscribed_topics or [])]
+                with ui.column().classes('us-panel gap-3 !p-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        ui.label('Subscriptions').classes('us-subhead')
+                        if subscribed:
+                            ui.label(f'{len(subscribed)} topics').classes(
+                                'us-micro us-muted')
+                    if not subscribed:
+                        ui.label('No subscriptions yet').classes('us-body us-muted')
+                    else:
                         for profile in profiles:
-                            if profile.subscribed_topics:
-                                for topic in profile.subscribed_topics:
-                                    with ui.row().classes('items-center gap-2 p-1.5 rounded').style('background: rgba(255,255,255,0.01)'):
-                                        ui.label('📡').classes('text-xs')
-                                        ui.label(topic).classes('text-[#e4e4e7] text-xs font-mono flex-1')
-                                        ui.button('✕', on_click=lambda p=profile, t=topic: unsubscribe_topic(p, t)).classes('text-[#ef4444] text-xs px-1')
+                            topics = [t for t in (profile.subscribed_topics or [])]
+                            if not topics:
+                                continue
+                            with ui.column().classes('gap-1 !py-1'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.label(' ').classes(
+                                        f"us-dot {'us-dot-live' if profile.connected else 'us-dot-idle'}")
+                                    ui.label(profile.name).classes(
+                                        'us-micro us-muted us-mono')
+                                for topic in topics:
+                                    with ui.row().classes(
+                                            'items-center gap-2 pl-4'):
+                                        ui.label(topic).classes(
+                                            'us-mono us-body us-truncate flex-1')
+                                        _btn('✕', 'us-btn-ghost',
+                                             lambda p=profile, t=topic:
+                                                 unsubscribe_topic(p, t))
 
-                # Publish panel
-                with ui.card().classes('flex-1 p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-                    ui.label('Publish Message').classes('text-white font-medium mb-2')
-                    pub_profile = ui.select(
-                        {p.id: p.name for p in profiles if p.connected},
-                        label='Connection',
-                        value=profiles[0].id if profiles else None,
-                    ).classes('w-full mb-2').props('outlined').style('color: #e4e4e7')
-                    pub_topic = ui.input('Topic', value='command').classes('w-full mb-2').props('outlined').style('color: #e4e4e7')
-                    pub_payload = ui.textarea('Payload (JSON or text)', value='{"cmd": "status"}').classes('w-full mb-2').props('outlined').style('color: #e4e4e7; font-family: monospace')
-                    ui.button('Publish', on_click=lambda: do_publish(pub_profile.value, pub_topic.value, pub_payload.value)).classes('bg-[#5c6fd0] text-white px-4 py-1.5 text-sm rounded-lg w-full')
+            # ── Publish ─────────────────────────────────────────────────
+            connected = [p for p in profiles if p.connected]
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                ui.label('Publish').classes('us-subhead')
+                if not connected:
+                    ui.label(
+                        'Connect a broker to publish.').classes('us-body us-muted')
+                else:
+                    state.setdefault('pub_profile', connected[0].id)
+                    with ui.row().classes('w-full gap-3 items-end flex-wrap'):
+                        pub_profile = ui.select(
+                            {p.id: p.name for p in connected},
+                            label='Connection',
+                            value=state['pub_profile'],
+                            on_change=lambda e: state.__setitem__(
+                                'pub_profile', e.value),
+                        ).props('dense outlined').classes('min-w-[180px]')
+                        pub_topic = ui.input('Topic', value='command').props(
+                            'dense outlined').classes('min-w-[220px]')
+                        pub_payload = ui.input('Payload').props(
+                            'dense outlined').classes('min-w-[220px] flex-1')
+                        _btn('Publish', 'us-btn-primary',
+                             lambda: do_publish(
+                                 state.get('pub_profile'),
+                                 pub_topic.value or '',
+                                 pub_payload.value or ''))
 
-        # Message history
-        with ui.card().classes('w-full p-4').style('background: #16181d; border-left: 2px solid #5c8af0'):
-            ui.label('Message History (last 50)').classes('text-white font-medium mb-3')
-            if not messages:
-                ui.label('No messages yet. Connect to an MQTT broker to receive data.').classes('text-[#52525b] text-sm py-4')
-            else:
-                with ui.column().classes('w-full gap-1 max-h-72 overflow-y-auto'):
-                    for msg in reversed(messages):
-                        with ui.row().classes('w-full items-start gap-2 p-2 rounded-lg').style('background: rgba(255,255,255,0.01)'):
-                            ui.label(msg.timestamp.strftime('%H:%M:%S')).classes('text-[#52525b] text-xs font-mono')
-                            ui.label(msg.topic).classes('text-[#5c8af0] text-xs font-mono min-w-32')
-                            ui.label(msg.payload[:80]).classes('text-[#e4e4e7] text-xs flex-1 font-mono')
+            # ── Message history ─────────────────────────────────────────
+            with ui.column().classes('us-panel gap-3 !p-4'):
+                with ui.row().classes('w-full items-center justify-between'):
+                    ui.label('Messages').classes('us-subhead')
+                    with ui.row().classes('items-center gap-2'):
+                        # Built as a real dict. `{'all': ...}.update({...})` looks
+                        # like a fluent chain but update() returns None, which
+                        # is what ui.select then choked on -- the screen 500'd
+                        # on first render whenever there were no profiles.
+                        connection_options = {'all': 'All connections'}
+                        connection_options.update({p.id: p.name for p in profiles})
+                        ui.select(
+                            connection_options,
+                            value=state['connection'],
+                            on_change=lambda e: _set_filter('connection', e.value),
+                        ).props('dense outlined options-dense').classes('w-[180px]')
+                        ui.input('Topic contains', value=state['topic']).props(
+                            'dense outlined').classes('w-[160px]').on_value_change(
+                            lambda e: _set_filter('topic', e.value))
+                        ui.select(
+                            {label: label for label, _ in LIMITS},
+                            value=str(state['limit']),
+                            on_change=lambda e: _set_filter('limit', e.value),
+                        ).props('dense outlined options-dense').classes('w-[90px]')
+                        if state['following']:
+                            _btn('⏸ Pause', 'us-btn-ghost',
+                                 _late_mqtt_page('toggle_follow'))
+                        else:
+                            _btn('▶ Follow', 'us-btn-secondary',
+                                 _late_mqtt_page('toggle_follow'))
 
-    # Actions
-    def _show_add_broker_dialog_impl():
-        dialog = ui.dialog()
-        with dialog, ui.card().classes('p-6 w-96').style('background: #16181d; border: 1px solid rgba(255,255,255,0.10)'):
-            ui.label('Add MQTT Broker').classes('text-white font-medium mb-4 text-lg')
-            name = ui.input('Name', value='My Broker').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            broker = ui.input('Broker Host', value='broker.hivemq.com').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            port = ui.number('Port', value=1883).classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            topic_prefix = ui.input('Topic Prefix', value='uartscope').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            username = ui.input('Username (optional)').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            password = ui.input('Password (optional)').classes('mb-2 w-full').props('outlined').style('color: #e4e4e7')
-            with ui.row().classes('gap-2 justify-end w-full mt-4'):
-                ui.button('Cancel', on_click=dialog.close).props('flat').classes('text-[#71717a]')
-                ui.button('Add', on_click=lambda: create_broker(
-                    name.value, broker.value, int(port.value), topic_prefix.value,
-                    username.value or None, password.value or None, dialog
-                )).classes('bg-[#5c6fd0] text-white px-4 py-2 rounded-lg')
+                if not messages:
+                    with ui.column().classes('us-empty w-full'):
+                        with ui.column().classes('gap-2'):
+                            if not profiles:
+                                ui.label('Nothing to show yet').classes('us-display')
+                                ui.label(
+                                    'Add and connect a broker; messages appear '
+                                    'here as they arrive.'
+                                ).classes('us-body')
+                            elif state['connection'] != 'all' or state['topic']:
+                                ui.label('No messages match this filter').classes(
+                                    'us-display')
+                                ui.label(
+                                    'Clear the connection or topic filter to see '
+                                    'the full stream.'
+                                ).classes('us-body')
+                            else:
+                                ui.label('No messages yet').classes('us-display')
+                                ui.label(
+                                    'Subscribe to a topic on a connected broker '
+                                    'and traffic will appear here.'
+                                ).classes('us-body')
+                else:
+                    ui.label(
+                        f'{len(messages)} shown'
+                        + (f' of the last {limit}' if limit else '')
+                        + (f" on '{state['topic']}'" if state['topic'] else '')
+                        + (' · following' if state['following'] else ' · paused')
+                    ).classes('us-micro us-muted')
+                    # Newest first: a message stream is read from the bottom,
+                    # and sorting descending means the most recent message is
+                    # always the first thing on screen.
+                    for m in reversed(messages):
+                        with ui.column().classes('us-log-line gap-0'):
+                            with ui.row().classes('items-baseline gap-2'):
+                                ui.label(_ts(m.timestamp)).classes(
+                                    'us-micro us-muted us-mono')
+                                ui.label(m.topic).classes(
+                                    'us-mono us-body us-truncate')
+                            ui.label(str(m.payload)).classes(
+                                'us-mono us-muted us-truncate')
 
-    _bind_mqtt_page('show_add_broker_dialog', _show_add_broker_dialog_impl)
+    def _ts(value):
+        """A message timestamp as HH:MM:SS, or the raw value if unparseable."""
+        if not value:
+            return '--:--:--'
+        text = str(value)
+        try:
+            from datetime import datetime as _dt
+            return _dt.fromisoformat(text).strftime('%H:%M:%S')
+        except (ValueError, TypeError):
+            return text[-8:] if len(text) >= 8 else text
 
-    async def create_broker(name, broker, port, topic_prefix, username, password, dialog):
+    def _set_filter(key, value):
+        state[key] = value if value not in (None, '') else (
+            'all' if key == 'connection' else '')
+        refresh_mqtt()
+
+    def toggle_follow():
+        state['following'] = not state['following']
+        refresh_mqtt()
+
+    def show_add_broker_dialog():
+        name = ui.input('Name', value='Broker').classes('w-full').props('outlined dense')
+        broker = ui.input('Broker', value='localhost').classes('w-full').props('outlined dense')
+        port = ui.input('Port', value='1883').classes('w-full').props('outlined dense')
+        topic_prefix = ui.input('Topic prefix', value='uartscope').classes('w-full').props('outlined dense')
+        username = ui.input('Username (optional)').classes('w-full').props('outlined dense')
+        password = ui.input('Password (optional)').classes('w-full').props('outlined dense').props('type=password')
+        with ui.dialog() as dialog, ui.card().classes('w-[420px] gap-2'):
+            ui.label('Add broker').classes('us-title')
+            for field in (name, broker, port, topic_prefix, username, password):
+                field.classes('w-full')
+            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                _btn('Cancel', 'us-btn-ghost', dialog.close)
+                _btn('Add', 'us-btn-primary', lambda: add_broker(
+                    name.value, broker.value, port.value,
+                    topic_prefix.value, username.value, password.value))
+
+    def add_broker(name, broker, port, topic_prefix, username, password):
         from app.core.mqtt_client import MQTTConnectionProfile
+        try:
+            port_num = int(port)
+        except (TypeError, ValueError):
+            ui.notify(f"'{port}' is not a valid port number", type='negative')
+            return
+        if not (name or '').strip() or not (broker or '').strip():
+            ui.notify('Name and broker are required', type='negative')
+            return
         profile = MQTTConnectionProfile(
-            name=name, broker=broker, port=port, topic_prefix=topic_prefix,
-            username=username, password=password,
+            name=(name or '').strip(), broker=(broker or '').strip(),
+            port=port_num, topic_prefix=(topic_prefix or 'uartscope').strip(),
+            username=username or None, password=password or None,
         )
         mqtt_manager.add_profile(profile)
-        dialog.close()
-        ui.notify(f"Broker '{name}' added", type='positive')
+        ui.notify(f"Broker '{profile.name}' added", type='positive')
         refresh_mqtt()
 
     async def connect_broker(profile):
@@ -2969,16 +3168,24 @@ def mqtt_page():
         refresh_mqtt()
 
     async def do_publish(profile_id, topic, payload):
+        if not profile_id:
+            ui.notify('No connected broker selected', type='negative')
+            return
         success = await mqtt_manager.publish(profile_id, topic, payload)
         if success:
-            ui.notify(f"Published to {topic}", type='positive')
+            ui.notify(f"Published to '{topic}'", type='positive')
         else:
-            ui.notify("Publish failed - not connected?", type='negative')
+            ui.notify('Publish failed — not connected?', type='negative')
 
-    # Poll for updates
+    _bind_mqtt_page('show_add_broker_dialog', show_add_broker_dialog)
+    _bind_mqtt_page('toggle_follow', toggle_follow)
+
     async def mqtt_refresh_loop():
         while True:
-            await asyncio.sleep(3)
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise
             refresh_mqtt()
 
     asyncio.create_task(mqtt_refresh_loop())
