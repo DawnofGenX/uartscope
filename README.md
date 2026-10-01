@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/DawnofGenX/uartscope/main/docs/og-banner.png" alt="uartscope" width="100%"/></p>
+
 # UARTScope Pro
 
 **Open-source embedded telemetry, debugging, and protocol analysis — the Wireshark of microcontrollers.**
