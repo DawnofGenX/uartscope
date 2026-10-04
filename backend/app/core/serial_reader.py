@@ -12,6 +12,28 @@ from app.core.device_manager import DeviceInfo
 logger = logging.getLogger(__name__)
 
 
+class SerialData(str):
+    """A serial line that carries both text and raw bytes.
+
+    Subclasses ``str`` so every existing ``on_data`` callback that expects
+    a text line continues to work unchanged — ``strip()``, ``startswith()``,
+    ``split()``, ``encode()``, ``len()`` all behave exactly as before.
+
+    Binary protocol frames (Modbus/CAN/I2C/SPI) are not valid UTF-8.  The
+    reader used to decode with ``errors="replace"`` and hand the mangled
+    string to decoders, which then produced plausible-looking but wrong
+    data (and even passed CRC checks).  ``SerialData`` fixes this by
+    preserving the exact original bytes in ``raw_bytes`` and flagging
+    whether the text is trustworthy via ``decode_error``.
+    """
+
+    def __new__(cls, text: str, raw_bytes: bytes, decode_error: bool = False):
+        instance = super().__new__(cls, text)
+        instance.raw_bytes = raw_bytes
+        instance.decode_error = decode_error
+        return instance
+
+
 class SerialReader:
     """Reads data from a serial port asynchronously and feeds the telemetry engine."""
 
@@ -85,16 +107,28 @@ class SerialReader:
                     continue
 
                 if line:
-                    decoded = line.decode("utf-8", errors="replace").strip()
-                    if decoded:
+                    # Try strict UTF-8 first. If the bytes are valid text,
+                    # text and raw_bytes are the same. If they are binary
+                    # protocol data (Modbus/CAN/I2C/SPI), we preserve the
+                    # exact bytes in raw_bytes and flag decode_error so
+                    # downstream consumers know the text is untrustworthy.
+                    try:
+                        decoded = line.decode("utf-8").strip()
+                        serial_data = SerialData(decoded, line, decode_error=False)
+                    except UnicodeDecodeError:
+                        # Binary data: keep the bytes, text is a lossy repr
+                        decoded = line.decode("utf-8", errors="replace").strip()
+                        serial_data = SerialData(decoded, line, decode_error=True)
+
+                    if serial_data:
                         device.last_seen = datetime.utcnow()
                         device.bytes_received += len(line)
                         device.packet_count += 1
                         # Call the data callback
                         if asyncio.iscoroutinefunction(on_data):
-                            await on_data(device.id, session_id, decoded)
+                            await on_data(device.id, session_id, serial_data)
                         else:
-                            on_data(device.id, session_id, decoded)
+                            on_data(device.id, session_id, serial_data)
                 else:
                     # No data, brief sleep to avoid busy-waiting
                     await asyncio.sleep(0.001)
