@@ -27,8 +27,16 @@ class SerialReader:
     ):
         """Start reading from a device's serial port."""
         if device.id in self._read_tasks:
-            logger.warning(f"Reader already running for {device.id}")
-            return
+            existing = self._read_tasks[device.id]
+            if not existing.done():
+                logger.warning(f"Reader already running for {device.id}")
+                return
+            # A dead or cancelled reader leaves a stale entry that would brick
+            # the device forever: every later start_device is a silent no-op.
+            # Take over by starting fresh.
+            logger.error(
+                f"Replacing dead reader for {device.name} ({device.port})"
+            )
 
         task = asyncio.create_task(self._read_loop(device, session_id, on_data))
         self._read_tasks[device.id] = task
