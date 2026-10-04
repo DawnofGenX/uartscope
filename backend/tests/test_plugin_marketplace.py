@@ -64,6 +64,20 @@ GOOD_PLUGIN = textwrap.dedent('''
 
 
 @pytest.fixture(autouse=True)
+def enable_plugin_installs():
+    """Enable plugin installs for tests that exercise the install path.
+
+    The default is False (safe by default). Tests that test install behaviour
+    need to opt in.
+    """
+    from app.config import settings
+    original = settings.plugin_install_enabled
+    settings.plugin_install_enabled = True
+    yield
+    settings.plugin_install_enabled = original
+
+
+@pytest.fixture(autouse=True)
 def isolate_protocol_manager():
     """Keep plugin registrations out of the shared decoder manager.
 

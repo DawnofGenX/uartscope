@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
+from app.config import settings
 from app.core.plugin_registry import PluginRegistry, PluginValidationError
 
 logger = logging.getLogger(__name__)
@@ -194,7 +195,17 @@ async def install(plugin_id: str, request: Request):
     Installing runs third-party Python inside the decode path. The module is
     validated first, a plugin may not claim a built-in protocol id, and nothing
     is written or registered unless both pass.
+
+    When `plugin_install_enabled` is False (the default), this returns 403
+    with a message naming the setting. The UI can tell the operator exactly
+    what to change.
     """
+    if not settings.plugin_install_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Plugin installation is disabled. Set "
+                   "UARTSCOPE_PLUGIN_INSTALL_ENABLED=true to enable it.")
+
     registry = _resolve(request)
     if registry is None:
         raise HTTPException(status_code=503, detail="Plugin registry is not configured")
