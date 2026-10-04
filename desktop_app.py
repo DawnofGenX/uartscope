@@ -1102,7 +1102,7 @@ def terminal_page():
             return
         queue = asyncio.Queue()
 
-        async def on_data(line=""):
+        async def on_data(device_id="", session_id="", line=""):
             await queue.put(line)
 
         try:
