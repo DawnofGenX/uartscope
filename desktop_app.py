@@ -3219,7 +3219,8 @@ def marketplace_page():
     what the decoder table actually contains.
     """
     from app.core.plugin_registry import (
-        PluginRegistry, PluginValidationError, default_registry_path)
+        PluginInstallDisabled, PluginRegistry, PluginValidationError,
+        default_registry_path)
     from app.config import settings
 
     # One registry per page build, wired to the same decoder manager the rest of
@@ -3355,6 +3356,12 @@ def marketplace_page():
         ui.notify(f"Installing '{plugin_id}'...", type='info')
         try:
             record = await registry.install(plugin_id, source_root=Path(manifest_path).parent)
+        except PluginInstallDisabled as exc:
+            # The install gate lives in the registry, because this screen calls
+            # it directly rather than going through the HTTP API. Saying which
+            # setting to change is the whole point of the refusal.
+            ui.notify(str(exc), type='warning')
+            return
         except (PluginValidationError, KeyError, OSError, ImportError) as exc:
             ui.notify(f"Install failed: {exc}", type='negative')
             return

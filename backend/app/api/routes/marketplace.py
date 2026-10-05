@@ -27,7 +27,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from app.config import settings
-from app.core.plugin_registry import PluginRegistry, PluginValidationError
+from app.core.plugin_registry import (PluginInstallDisabled, PluginRegistry,
+                                      PluginValidationError)
 
 logger = logging.getLogger(__name__)
 
@@ -199,13 +200,12 @@ async def install(plugin_id: str, request: Request):
     When `plugin_install_enabled` is False (the default), this returns 403
     with a message naming the setting. The UI can tell the operator exactly
     what to change.
-    """
-    if not settings.plugin_install_enabled:
-        raise HTTPException(
-            status_code=403,
-            detail="Plugin installation is disabled. Set "
-                   "UARTSCOPE_PLUGIN_INSTALL_ENABLED=true to enable it.")
 
+    The gate itself lives in `PluginRegistry.install`, because the desktop app
+    calls that method directly and never comes through HTTP. This route only
+    translates the refusal into a 403 -- duplicating the check here is what
+    left the shipped Windows executable ungated.
+    """
     registry = _resolve(request)
     if registry is None:
         raise HTTPException(status_code=503, detail="Plugin registry is not configured")
@@ -222,6 +222,8 @@ async def install(plugin_id: str, request: Request):
 
     try:
         record = await registry.install(plugin_id, source_root=_source_root(request))
+    except PluginInstallDisabled as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except PluginValidationError as exc:
         raise HTTPException(status_code=400,
                             detail=f"Plugin rejected: {exc}") from exc

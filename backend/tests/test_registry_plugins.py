@@ -32,6 +32,25 @@ def manifest():
     return json.loads(MANIFEST.read_text(encoding='utf-8'))
 
 
+@pytest.fixture(autouse=True)
+def allow_installs():
+    """These tests install real plugins, so they opt in explicitly.
+
+    `plugin_install_enabled` defaults to False because installing a plugin runs
+    third-party Python in-process with no sandbox. That default is the
+    security control, and it is enforced inside `PluginRegistry.install` -- the
+    choke point every caller shares. A test suite that exercises the install
+    path therefore has to turn it on deliberately rather than inherit it, so
+    that flipping the default off can never be silently undone by a test that
+    forgot the gate exists.
+    """
+    from app.config import settings
+    original = settings.plugin_install_enabled
+    settings.plugin_install_enabled = True
+    yield
+    settings.plugin_install_enabled = original
+
+
 def _load(plugin_id, manifest, tmp_path):
     """Install one registry plugin through the real path."""
     manager = ProtocolManager()
