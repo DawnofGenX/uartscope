@@ -6,7 +6,7 @@ open -- an unbounded element leak. Every v2 screen calls container.clear()
 first. This is a structural assertion, because the leak is a property of the
 page builder rather than of a function with a return value.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_screen_refresh_contract.py -v
+Run:  .venv/bin/python -m pytest tests/test_screen_refresh_contract.py -v
 """
 import ast
 from pathlib import Path

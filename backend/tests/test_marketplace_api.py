@@ -7,7 +7,7 @@ failure modes that a mock gets wrong for free -- a registry that is unreachable
 must not read as an empty marketplace, and an install must actually land in the
 manager the decode path uses.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_marketplace_api.py -v
+Run:  .venv/bin/python -m pytest tests/test_marketplace_api.py -v
 """
 import json
 import sys
@@ -62,6 +62,20 @@ def build_app(tmp_path, manager, manifest_path):
         state_file=tmp_path / "state.json")
     app.state.registry_manifest = manifest_path
     return app
+
+
+@pytest.fixture(autouse=True)
+def enable_plugin_installs():
+    """Enable plugin installs for tests that exercise the install path.
+
+    The default is False (safe by default). Tests that test install behaviour
+    need to opt in; tests that test the gate use monkeypatch to flip it back.
+    """
+    from app.config import settings
+    original = settings.plugin_install_enabled
+    settings.plugin_install_enabled = True
+    yield
+    settings.plugin_install_enabled = original
 
 
 @pytest.fixture
@@ -221,6 +235,69 @@ class TestInstallEndpoint:
         r = await _post(app, "/api/plugins/lin_ldf/install")
         assert r.status_code == 409, r.text
         assert 'refresh' in r.json()['detail'].lower()
+
+
+class TestInstallGate:
+    """The plugin-install interlock: off by default, enforced, honest error."""
+
+    def test_default_is_false(self):
+        """Pin the default. Without this, someone flips it back and no test notices."""
+        from app.config import Settings
+        assert Settings().plugin_install_enabled is False
+
+    @pytest.mark.asyncio
+    async def test_install_refused_when_disabled(self, wired, monkeypatch):
+        """With plugin_install_enabled=False (the default), install is 403."""
+        from app.config import settings
+        monkeypatch.setattr(settings, "plugin_install_enabled", False)
+        app, manager, tmp = wired
+        await _post(app, "/api/plugins/refresh")
+
+        r = await _post(app, "/api/plugins/lin_ldf/install")
+        assert r.status_code == 403, r.text
+        assert "UARTSCOPE_PLUGIN_INSTALL_ENABLED" in r.json()['detail']
+
+        # The decoder must NOT be registered
+        assert manager.get_decoder('lin_ldf') is None
+
+    @pytest.mark.asyncio
+    async def test_install_succeeds_when_enabled(self, wired, monkeypatch):
+        """With plugin_install_enabled=True, install works exactly as before."""
+        from app.config import settings
+        monkeypatch.setattr(settings, "plugin_install_enabled", True)
+        app, manager, tmp = wired
+        await _post(app, "/api/plugins/refresh")
+
+        r = await _post(app, "/api/plugins/lin_ldf/install")
+        assert r.status_code == 200, r.text
+        assert r.json()['installed'] is True
+        assert manager.get_decoder('lin_ldf') is not None
+
+    @pytest.mark.asyncio
+    async def test_catalog_works_when_installs_disabled(self, wired, monkeypatch):
+        """GET /api/plugins must work regardless of the install gate."""
+        from app.config import settings
+        monkeypatch.setattr(settings, "plugin_install_enabled", False)
+        app, manager, tmp = wired
+        await _post(app, "/api/plugins/refresh")
+
+        r = await _get(app, "/api/plugins")
+        assert r.status_code == 200
+        assert len(r.json()['plugins']) == 2
+
+    @pytest.mark.asyncio
+    async def test_install_gate_error_names_the_setting(self, wired, monkeypatch):
+        """The 403 message must tell the operator what to change."""
+        from app.config import settings
+        monkeypatch.setattr(settings, "plugin_install_enabled", False)
+        app, manager, tmp = wired
+        await _post(app, "/api/plugins/refresh")
+
+        r = await _post(app, "/api/plugins/lin_ldf/install")
+        assert r.status_code == 403
+        detail = r.json()['detail']
+        assert "UARTSCOPE_PLUGIN_INSTALL_ENABLED" in detail
+        assert "disabled" in detail.lower()
 
 
 class TestInstalledSurvivesRestart:

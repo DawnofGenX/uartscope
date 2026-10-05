@@ -5,9 +5,28 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] — 2026-10-05
 
 ### Added
+
+- **A FAQ.** `docs/FAQ.md` covers finding a serial port, 8E1 sensors, which
+  framing a protocol needs, why a plugin install was refused, why a metric has
+  no unit, and the bugs this project has already shipped once. Every falsifiable
+  claim in it is checked against the code.
+
+- **Real-hardware acceptance tests.** `hardware/esp32_acceptance/` contains
+  firmware that emits the exact byte patterns this project has mishandled — a
+  frame containing `0x0A`, a gap-delimited frame with no terminator, and a
+  frame containing invalid UTF-8 — with CRCs computed on-device, so no sensors
+  are needed. `e2e_check.py` boots the backend on a real port, registers a
+  device through the same endpoints the UI uses, and reads telemetry, sessions,
+  exports, alerts, performance and the websocket back out: 19 checks.
+
+- **CI now fails if the serial tests stop running.** The hardware tests use a
+  pty, which is a real character device needing no adapter and no root, so they
+  execute on a hosted runner. Without a gate, a skip guard added for "no serial
+  hardware in CI" would turn the only tests covering the reader into silent
+  no-ops — which is how the bugs above reached a fully green suite.
 
 - **A real plugin marketplace.** The Marketplace screen rendered a hardcoded
   list of six plugins with invented download counts, and its Install button
@@ -47,6 +66,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- **Framing is now chosen per device protocol.** Text protocols keep
+  newline framing; `modbus_rtu`, `can`, `can_dbc`, `i2c` and `spi` are framed
+  on the 3.5-character silent gap, derived from the device's own line settings
+  so a 9600 8E1 sensor frames at roughly 4 ms rather than at a hardcoded
+  second. A single global rule does not work: gap framing merged a burst of
+  text lines into one delivery, which would have broken every text device.
+
+  **This makes the device protocol load-bearing.** A board speaking Modbus
+  must be configured as `modbus_rtu`; configured as `serial` it stays
+  line-framed and frames are split. There is no reliable automatic detection
+  at the framing layer, so it is an explicit choice.
+
+- **Devices can express a real RS-485 configuration.** `parity` (`N`/`E`/`O`/
+  `M`/`S`) and `stopbits` (`1`/`1.5`/`2`) are settable per device and validated
+  against pyserial's real values. Previously every port opened 8N1, so a Modbus
+  sensor at 9600 8E1 could not be expressed at all and every frame failed CRC.
+  They are stored in the existing `metadata_json` column rather than as new
+  columns, because the project calls `create_all` with no migration framework
+  and a new column would break existing databases. Defaults are unchanged, so
+  existing devices still open 8N1.
+
 - **Performance and MQTT rebuilt to v2.** These were the last two screens on
   the v1 treatment, and both were quietly broken in the same way: each rebuilt
   its entire UI every 3 seconds without clearing the container, so the page
@@ -71,6 +111,46 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **The Terminal screen could not receive a single byte from real hardware.**
+  `SerialReader` calls the data callback with three arguments; the Terminal
+  screen's callback accepted one. The `TypeError` was raised on the first real
+  line and swallowed by the read loop's broad handler, so the screen only ever
+  worked on seeded demo data.
+
+- **A crashed reader bricked its device permanently.** `_read_tasks` was only
+  ever popped by `stop_device()`, so once a reader task died every later start
+  was a silent no-op that only logged a warning — and the heartbeat's
+  auto-reconnect calls `connect()`, never `start_device()`, so it could not
+  clear it. Unplug a board once and it stayed dead until restart.
+  `start_device` now takes over a dead task and logs at ERROR with the device
+  name and port.
+
+- **Binary protocols could not decode a single real frame.** The reader decoded
+  with `errors="replace"` before anything downstream saw the bytes, so any byte
+  outside UTF-8 became U+FFFD. A Modbus RTU response containing `0xFF 0x9C`
+  reached the decoder as two replacement characters and produced
+  plausible-looking but wrong data — and still passed a CRC check. Lines are
+  now `SerialData`, a `str` subclass carrying `raw_bytes` and `decode_error`,
+  so existing consumers are unchanged and decoders get exact bytes.
+
+- **Frames containing `0x0A` were split in two.** `readline()` terminates on
+  `0x0A`/`0x0D`, and a Modbus payload can legally contain either — a register
+  value of 10 is `0x000A`. Measured: a frame whose value was `0x000A` arrived
+  as two chunks, so the decoder received a truncated frame plus trailing CRC. A
+  real RS-485 master also sends no terminator at all, only a 3.5-character
+  pause, so newline framing could not deliver a Modbus response correctly even
+  when the payload held no newline byte.
+
+- **Alerts never fired for a device connected over serial.** `app/main.py`
+  called `alert_engine.evaluate()` in exactly one place — the MQTT callback —
+  so the serial path broadcast metrics and recorded packets while no rule was
+  ever checked. A rule created through the REST API looked correctly
+  configured and reported `trigger_count: 0` forever. Session metrics had the
+  same gap: `record_metric()` was called by the desktop app but not the API, so
+  every API-recorded session had an empty metric list and the session Metrics
+  tab was blank. Both now use the metrics the line actually produced, with
+  their real units.
+
 - **`POST /api/protocols/encode` returned 500 for an integer `can_id`.**
   `CANDecoder.encode` parsed the id with a base of 16 unconditionally, so
   `{"can_id": 256}` raised `TypeError: int() can't convert non-string with
@@ -88,6 +168,34 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   invalid file can be handled.
 
 ### Removed
+
+- **The plugin-install interlock did not exist.** The config comment stated
+  that installing a plugin "stays off unless the operator turns it on
+  deliberately" — but the default was `True`, **no code read the setting**, and
+  the install route had no gate at all. Installing a plugin runs third-party
+  Python in the application process via `exec()` with no sandbox, so remote
+  code execution was on by default while the configuration looked like the
+  control for it.
+
+  The default is now `False` and the gate is enforced inside
+  `PluginRegistry.install()` — the point every caller shares. Gating only the
+  HTTP route, which is what the first fix did, left the shipped PyInstaller
+  Windows executable able to install plugins with the setting off: the desktop
+  app calls `install()` directly and never touches HTTP. `test_plugin_install_gate.py`
+  pins both paths, including that a refused install writes nothing to disk.
+
+- **Four config keys that never did anything.** `host`, `port`,
+  `telemetry_buffer_size` and `alert_check_interval` were declared with
+  explanatory comments and had zero readers anywhere in the codebase. Setting
+  them changed nothing. They are deleted rather than left to look functional,
+  because a comment describing behaviour the code does not implement is itself
+  the defect. `default_baudrate` is still unwired (`DeviceCreate` hardcodes
+  `115200`) and now says so plainly instead of implying otherwise.
+
+- **My own environment.** 23 files carried a `.venv-v2` interpreter path in
+  their `Run:` docstrings that only ever existed on one machine, and the README
+  advertised WSL-specific instructions. Both are gone; the FAQ covers Linux,
+  macOS and Windows instead.
 
 - **Invented download counts.** The catalog served no telemetry, so the numbers
   were fiction. A manifest entry may not carry a `downloads` field, and a test
@@ -308,4 +416,5 @@ about what has been redesigned.
 
 [2.0.1]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.0.1
 [2.0.0]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.0.0
-[Unreleased]: https://github.com/DawnofGenX/uartscope/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/DawnofGenX/uartscope/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/DawnofGenX/uartscope/compare/v2.0.1...v2.1.0

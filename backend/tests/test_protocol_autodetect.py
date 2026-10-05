@@ -12,7 +12,7 @@ and a read/write direction that the bytes do not contain.
 These tests assert the detection outcome, not the score, because the score is
 an implementation detail and the outcome is the contract.
 
-Run:  ../.venv-v2/bin/python tests/test_protocol_autodetect.py
+Run:  .venv/bin/python tests/test_protocol_autodetect.py
 """
 import sys
 from pathlib import Path

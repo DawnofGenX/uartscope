@@ -87,7 +87,7 @@ curl http://127.0.0.1:8080/api/health
 ```
 
 ```json
-{"status":"healthy","version":"2.0.1","devices":{"total":0,"connected":0,"streaming":0,"errors":0,"total_bytes_received":0,"total_packets":0},"active_sessions":0,"websocket_clients":0}
+{"status":"healthy","version":"2.1.0","devices":{"total":0,"connected":0,"streaming":0,"errors":0,"total_bytes_received":0,"total_packets":0},"active_sessions":0,"websocket_clients":0}
 ```
 
 ### Docker
@@ -101,6 +101,10 @@ given `API_URL=http://backend:8080` and the browser talks to the FastAPI
 service on :8080, while the UI is served on :3000.
 
 ## Documentation
+
+- **[FAQ](docs/FAQ.md)** — finding your serial port on Linux, macOS and Windows,
+  8E1 sensors, which framing a protocol needs, why a plugin install was
+  refused, and the bugs this project has already fixed once
 
 The long-form guides have been removed. What remains here:
 
@@ -117,11 +121,15 @@ https://github.com/DawnofGenX/uartscope/tree/v2.0.1/docs
 Python 3.11–3.13 (CI matrix). From the repo root, with a venv active:
 
 ```bash
-.venv/bin/python -m pytest backend/tests/ -q    # 75 tests
+.venv/bin/python -m pytest backend/tests/ -q
 python check_handler_order.py
 python check_dict_keys.py
 python smoke_pages.py --boot --wait 60          # renders every screen headless
 ```
+
+The suite covers the serial reader against a real character device (a pty), so
+the hardware path is tested without a board attached. CI additionally fails the
+build if those tests stop running. See the [FAQ](docs/FAQ.md#development).
 
 Lint is `ruff check app/ --line-length=120 --select E9,F63,F7,F82` from
 `backend/`, enforced in CI.

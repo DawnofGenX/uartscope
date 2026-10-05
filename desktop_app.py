@@ -634,9 +634,11 @@ def _is_real(value):
     """True when a backend-detected string is actual information.
 
     detect_ports() returns the literal "n/a" (description) and "Unknown"
-    (board_type) for anything it cannot fingerprint, and WSL reports every
-    ttyS* that way. Rendering those verbatim puts "n/a" in the UI as though it
-    were a device description, so they are treated as missing everywhere.
+    (board_type) for anything it cannot fingerprint. Every Linux machine
+    reports ttyS0-ttyS7 whether or not a serial port exists, and those always
+    come back unfingerprinted. Rendering those verbatim puts "n/a" in the UI as
+    though it were a device description, so they are treated as missing
+    everywhere.
     """
     return bool(value) and value.strip().lower() not in (
         'n/a', 'na', 'unknown', 'none', '-', 'null')
@@ -1102,7 +1104,7 @@ def terminal_page():
             return
         queue = asyncio.Queue()
 
-        async def on_data(line=""):
+        async def on_data(device_id="", session_id="", line=""):
             await queue.put(line)
 
         try:
@@ -3219,7 +3221,8 @@ def marketplace_page():
     what the decoder table actually contains.
     """
     from app.core.plugin_registry import (
-        PluginRegistry, PluginValidationError, default_registry_path)
+        PluginInstallDisabled, PluginRegistry, PluginValidationError,
+        default_registry_path)
     from app.config import settings
 
     # One registry per page build, wired to the same decoder manager the rest of
@@ -3355,6 +3358,12 @@ def marketplace_page():
         ui.notify(f"Installing '{plugin_id}'...", type='info')
         try:
             record = await registry.install(plugin_id, source_root=Path(manifest_path).parent)
+        except PluginInstallDisabled as exc:
+            # The install gate lives in the registry, because this screen calls
+            # it directly rather than going through the HTTP API. Saying which
+            # setting to change is the whole point of the refusal.
+            ui.notify(str(exc), type='warning')
+            return
         except (PluginValidationError, KeyError, OSError, ImportError) as exc:
             ui.notify(f"Install failed: {exc}", type='negative')
             return

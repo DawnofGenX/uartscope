@@ -29,6 +29,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.config import settings
 from app.core.protocol_decoder import ProtocolDecoder
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,15 @@ logger = logging.getLogger(__name__)
 BUILTIN_IDS = frozenset({
     'uart_text', 'modbus_rtu', 'i2c', 'spi', 'can', 'can_dbc',
 })
+
+
+class PluginInstallDisabled(Exception):
+    """Raised when an install is attempted while installs are turned off.
+
+    A dedicated type so the API route can map it to 403 and the desktop UI can
+    tell the operator which setting to change, instead of every caller
+    re-deriving that check from the config.
+    """
 
 
 def default_registry_path() -> Optional[Path]:
@@ -241,7 +251,24 @@ class PluginRegistry:
         Order matters: validate first, refuse a colliding id second, write to
         disk third, register last. A failure at any step leaves the manager in
         the state it was in before.
+
+        The `plugin_install_enabled` gate lives HERE, not only in the API
+        route, because this method is the choke point every caller goes
+        through -- and the desktop app calls it directly (desktop_app.py's
+        Marketplace screen) without ever touching HTTP. A gate on the route
+        alone protected the API while leaving the primary shipped product,
+        the PyInstaller Windows executable, able to exec third-party Python
+        with the setting off. Raising a dedicated exception type lets the
+        route map it to 403 and lets the UI say something useful, instead of
+        both surfaces having to re-check the flag and one of them eventually
+        forgetting.
         """
+        if not settings.plugin_install_enabled:
+            raise PluginInstallDisabled(
+                "Plugin installation is disabled. Set "
+                "UARTSCOPE_PLUGIN_INSTALL_ENABLED=true to enable it."
+            )
+
         entry = self.get_entry(plugin_id)
         module_name = entry.get('module') or f"{plugin_id}.py"
         origin_dir = Path(source_root) if source_root else self._install_dir

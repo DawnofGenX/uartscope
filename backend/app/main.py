@@ -22,7 +22,7 @@ from app.api.routes.mqtt import router as mqtt_router
 from app.api.routes import marketplace as marketplace_routes
 from app.core.device_manager import device_manager
 from app.core.serial_reader import serial_reader
-from app.core.telemetry_engine import telemetry_engine
+from app.core.telemetry_engine import telemetry_engine, Metric
 from app.core.session_recorder import session_recorder
 from app.core.performance_tracker import performance_tracker
 from app.core.mqtt_client import mqtt_manager, MQTTConnectionProfile, MQTTMessage
@@ -246,11 +246,37 @@ async def start_device_stream(device_id: str):
     async def on_data(dev_id=device_id, sess_id=session_id, line: str = ""):
         import time as _time
         _recv_start = _time.time()
-        await telemetry_engine.process_line(dev_id, sess_id, line)
+        parsed = await telemetry_engine.process_line(dev_id, sess_id, line)
         await session_recorder.record_packet(sess_id, {
             "device_id": dev_id,
             "raw": line,
         })
+
+        # Record this line's metrics into the session. Without this every
+        # recorded session had an empty metric list and the session Metrics tab
+        # had nothing to show, which is what desktop_app.py already did.
+        for metric in getattr(parsed, "metrics", None) or []:
+            await session_recorder.record_metric(sess_id, {
+                "name": metric.name,
+                "value": metric.value,
+                "unit": metric.unit,
+                "timestamp": metric.timestamp.isoformat(),
+            })
+
+        # Evaluate alerts against the metrics THIS line produced, with their
+        # real units. This was missing entirely from the API path: the only
+        # call to alert_engine.evaluate in this module sat in the MQTT message
+        # callback, so an alert rule configured through the REST API against a
+        # serial device never fired and reported trigger_count=0 while looking
+        # perfectly configured. Re-reading get_latest_values() here would be
+        # wrong for the reason desktop_app.py documents -- it re-evaluates
+        # every stale value the device has ever sent, on every line.
+        for metric in getattr(parsed, "metrics", None) or []:
+            await alert_engine.evaluate(
+                dev_id, sess_id,
+                Metric(name=metric.name, value=metric.value,
+                       unit=metric.unit),
+            )
 
         # Record performance metrics
         latency_ms = (_time.time() - _recv_start) * 1000

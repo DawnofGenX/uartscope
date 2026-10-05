@@ -12,7 +12,7 @@ walks each `def *_page()` body with the `ast` module and reports every
 `on_click=` / `on_value_change=` / `on(...)` argument that names a nested
 function defined later in the same body.
 
-Run:  .venv-v2/bin/python check_handler_order.py [module.py]
+Run:  .venv/bin/python check_handler_order.py [module.py]
 """
 import ast
 import sys

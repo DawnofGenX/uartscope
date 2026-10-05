@@ -12,7 +12,7 @@ unguarded `int(can_id, 16)`, raising
 HTTP 500 from POST /api/protocols/encode. An integer id is the more natural
 JSON input, so the crash was on the common path.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_can_encode.py -v
+Run:  .venv/bin/python -m pytest tests/test_can_encode.py -v
 """
 import sys
 from pathlib import Path

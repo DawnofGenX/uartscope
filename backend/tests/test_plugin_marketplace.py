@@ -14,7 +14,7 @@ The plugin is loaded from a file on disk and validated against the
 `ProtocolDecoder` interface before it is registered, because a plugin is
 third-party code that will run inside the decode path.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_plugin_marketplace.py -v
+Run:  .venv/bin/python -m pytest tests/test_plugin_marketplace.py -v
 """
 import asyncio
 import json
@@ -61,6 +61,20 @@ GOOD_PLUGIN = textwrap.dedent('''
         def encode(self, data):
             return b"\\x00"
 ''')
+
+
+@pytest.fixture(autouse=True)
+def enable_plugin_installs():
+    """Enable plugin installs for tests that exercise the install path.
+
+    The default is False (safe by default). Tests that test install behaviour
+    need to opt in.
+    """
+    from app.config import settings
+    original = settings.plugin_install_enabled
+    settings.plugin_install_enabled = True
+    yield
+    settings.plugin_install_enabled = original
 
 
 @pytest.fixture(autouse=True)

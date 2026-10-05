@@ -8,7 +8,7 @@ a script, a CI job, or another client had no way to export a capture.
 These test the builder directly, then the route, so the format is pinned
 independently of how it is served.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_session_bundle.py -v
+Run:  .venv/bin/python -m pytest tests/test_session_bundle.py -v
 """
 import io
 import json

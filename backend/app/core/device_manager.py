@@ -13,6 +13,20 @@ from app.core.performance_tracker import performance_tracker
 
 logger = logging.getLogger(__name__)
 
+# pyserial parity/stopbits mappings
+PARITY_MAP = {
+    "N": serial.PARITY_NONE,
+    "E": serial.PARITY_EVEN,
+    "O": serial.PARITY_ODD,
+    "M": serial.PARITY_MARK,
+    "S": serial.PARITY_SPACE,
+}
+STOPBITS_MAP = {
+    1.0: serial.STOPBITS_ONE,
+    1.5: serial.STOPBITS_ONE_POINT_FIVE,
+    2.0: serial.STOPBITS_TWO,
+}
+
 
 class DeviceInfo:
     """Runtime state of a connected device."""
@@ -24,6 +38,8 @@ class DeviceInfo:
         self.baudrate = create.baudrate
         self.board_type = create.board_type
         self.metadata = create.metadata or {}
+        self.parity = create.parity
+        self.stopbits = create.stopbits
         self.status = "disconnected"
         self.serial_conn: Optional[serial.Serial] = None
         self.created_at = datetime.utcnow()
@@ -47,6 +63,8 @@ class DeviceInfo:
             metadata_json=self.metadata,
             created_at=self.created_at,
             last_seen=self.last_seen,
+            parity=self.parity,
+            stopbits=self.stopbits,
         )
 
 
@@ -213,6 +231,8 @@ class DeviceManager:
             device.serial_conn = serial.Serial(
                 port=device.port,
                 baudrate=device.baudrate,
+                parity=PARITY_MAP[device.parity],
+                stopbits=STOPBITS_MAP[device.stopbits],
                 timeout=settings.serial_timeout,
                 write_timeout=settings.serial_timeout,
             )

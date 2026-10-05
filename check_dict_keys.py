@@ -19,7 +19,7 @@ invisible until someone notices the output is wrong. The only defence is to
 compare what the UI reads against what the producers actually write.
 
 Usage:
-    .venv-v2/bin/python check_dict_keys.py
+    .venv/bin/python check_dict_keys.py
 Exit code 1 if any read key is unwritten.
 """
 import ast

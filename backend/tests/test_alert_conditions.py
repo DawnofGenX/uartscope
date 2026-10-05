@@ -9,7 +9,7 @@ the rule looked perfectly configured while doing nothing.
 These tests exist so that cannot regress. They assert the symbols the product
 actually emits, not just the internal names.
 
-Run:  ../.venv-v2/bin/python tests/test_alert_conditions.py
+Run:  .venv/bin/python tests/test_alert_conditions.py
 """
 import sys
 from pathlib import Path

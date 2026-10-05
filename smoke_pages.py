@@ -11,8 +11,8 @@ fake device bound, because the two paths build completely different trees.
 
 Two modes:
 
-    .venv-v2/bin/python smoke_pages.py              # probe a running app
-    .venv-v2/bin/python smoke_pages.py --boot       # start the app, probe, stop
+    .venv/bin/python smoke_pages.py              # probe a running app
+    .venv/bin/python smoke_pages.py --boot       # start the app, probe, stop
 
 --boot is what CI uses. Without it the script only tests whatever happens to be
 listening, which in CI is nothing.

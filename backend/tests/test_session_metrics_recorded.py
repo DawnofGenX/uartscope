@@ -11,7 +11,7 @@ full `packets` list, and only the metrics are missing. Nothing raises.
 This test drives the same sequence the live stream path uses, so it fails if the
 recording step is removed or renamed again.
 
-Run:  ../.venv-v2/bin/python tests/test_session_metrics_recorded.py
+Run:  .venv/bin/python tests/test_session_metrics_recorded.py
 """
 import asyncio
 import json
