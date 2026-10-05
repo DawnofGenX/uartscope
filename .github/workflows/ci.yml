@@ -43,6 +43,52 @@ jobs:
         env:
           UARTSCOPE_DATABASE_URL: sqlite+aiosqlite:///./test.db
 
+      # The hardware tests run against a pty, which is a real character device
+      # the kernel drives exactly as it drives /dev/ttyUSB0 -- no physical
+      # adapter, no root, no /dev/ttyUSB* present. That is why they execute at
+      # all on a hosted runner.
+      #
+      # This step asserts they RAN. Without it, adding a skip guard for "no
+      # serial hardware in CI" would silently turn the only tests that exercise
+      # the reader into no-ops: the suite stays green, the coverage disappears,
+      # and the Terminal-callback and split-frame bugs that shipped through a
+      # green 161-test suite come straight back. A test that stops running must
+      # fail the build, not quietly pass.
+      - name: Hardware-path tests actually ran
+        run: |
+          cd backend
+          pytest tests/test_binary_framing.py \
+                 tests/test_byte_preservation.py \
+                 tests/test_parity_stopbits.py \
+                 tests/test_terminal_callback_contract.py \
+                 -v --tb=short -p no:cacheprovider 2>&1 | tee /tmp/hw.log
+          # A collection error, a skip, or a missing file must all fail here.
+          # pytest exits 5 when it collected nothing at all.
+          #
+          # Match the SUMMARY line only. Two earlier versions of this check were
+          # broken in ways that would have shipped silently:
+          #   - anchoring with ^ never matches, because pytest wraps the summary
+          #     in '=' fences, so the gate failed every GOOD build;
+          #   - matching a bare 'error' anywhere matched test names like
+          #     test_binary_frame_has_decode_error_flag and every
+          #     PydanticDeprecatedSince20 warning line, so the gate failed
+          #     every build too.
+          # Read the summary, then require every count in it to be zero-skipped.
+          summary="$(grep -E '=+ .*(passed|failed|error).* =+' /tmp/hw.log | tail -1)"
+          echo "summary: ${summary:-<none found>}"
+          if [ -z "$summary" ]; then
+            echo "::error::no pytest summary line -- the hardware tests did not run"
+            exit 1
+          fi
+          if ! echo "$summary" | grep -qE '[0-9]+ passed'; then
+            echo "::error::the serial hardware tests did not pass -- see above"
+            exit 1
+          fi
+          if echo "$summary" | grep -qE '[0-9]+ (skipped|failed|error)'; then
+            echo "::error::serial hardware tests were skipped, failed or errored"
+            exit 1
+          fi
+
       # The static checks exist because v1 shipped six screens that raised
       # UnboundLocalError on every render, and a dict key the UI read that no
       # producer ever wrote. Both are invisible to pytest -- the screen simply
