@@ -1,7 +1,13 @@
 """Pydantic models for API schemas."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+
+
+# Valid pyserial parity values
+VALID_PARITY = {"N", "E", "O", "M", "S"}
+# Valid pyserial stopbits values
+VALID_STOPBITS = {1.0, 1.5, 2.0}
 
 
 # Device schemas
@@ -12,6 +18,54 @@ class DeviceCreate(BaseModel):
     baudrate: int = 115200
     board_type: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    parity: str = "N"
+    stopbits: float = 1.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_serial_config_from_metadata(cls, data):
+        """Read parity/stopbits from metadata if not explicitly provided.
+
+        When a device is loaded from the DB, devices.py constructs
+        DeviceCreate without parity/stopbits. The values are in
+        metadata_json (injected at create time). This validator pulls
+        them back out so the device reconnects with the same settings.
+        """
+        if isinstance(data, dict):
+            metadata = data.get("metadata") or {}
+            if "parity" not in data and "parity" in metadata:
+                data["parity"] = metadata["parity"]
+            if "stopbits" not in data and "stopbits" in metadata:
+                data["stopbits"] = metadata["stopbits"]
+        return data
+
+    @field_validator("parity")
+    @classmethod
+    def validate_parity(cls, v: str) -> str:
+        if v not in VALID_PARITY:
+            raise ValueError(f"parity must be one of {VALID_PARITY}, got {v!r}")
+        return v
+
+    @field_validator("stopbits")
+    @classmethod
+    def validate_stopbits(cls, v: float) -> float:
+        if v not in VALID_STOPBITS:
+            raise ValueError(f"stopbits must be one of {VALID_STOPBITS}, got {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def inject_serial_config_into_metadata(self):
+        """Ensure parity/stopbits are persisted in metadata_json.
+
+        The DB has no dedicated columns for serial line settings (and no
+        migration path to add them). Storing them in metadata_json means
+        they survive a DB round-trip without any schema change.
+        """
+        if self.metadata is None:
+            self.metadata = {}
+        self.metadata["parity"] = self.parity
+        self.metadata["stopbits"] = self.stopbits
+        return self
 
 
 class DeviceResponse(BaseModel):
@@ -25,6 +79,8 @@ class DeviceResponse(BaseModel):
     metadata_json: Optional[Dict[str, Any]]
     created_at: datetime
     last_seen: Optional[datetime]
+    parity: str = "N"
+    stopbits: float = 1.0
 
     class Config:
         from_attributes = True
