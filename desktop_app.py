@@ -634,9 +634,11 @@ def _is_real(value):
     """True when a backend-detected string is actual information.
 
     detect_ports() returns the literal "n/a" (description) and "Unknown"
-    (board_type) for anything it cannot fingerprint, and WSL reports every
-    ttyS* that way. Rendering those verbatim puts "n/a" in the UI as though it
-    were a device description, so they are treated as missing everywhere.
+    (board_type) for anything it cannot fingerprint. Every Linux machine
+    reports ttyS0-ttyS7 whether or not a serial port exists, and those always
+    come back unfingerprinted. Rendering those verbatim puts "n/a" in the UI as
+    though it were a device description, so they are treated as missing
+    everywhere.
     """
     return bool(value) and value.strip().lower() not in (
         'n/a', 'na', 'unknown', 'none', '-', 'null')

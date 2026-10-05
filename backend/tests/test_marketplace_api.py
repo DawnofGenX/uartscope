@@ -7,7 +7,7 @@ failure modes that a mock gets wrong for free -- a registry that is unreachable
 must not read as an empty marketplace, and an install must actually land in the
 manager the decode path uses.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_marketplace_api.py -v
+Run:  .venv/bin/python -m pytest tests/test_marketplace_api.py -v
 """
 import json
 import sys

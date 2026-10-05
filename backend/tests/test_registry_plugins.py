@@ -8,7 +8,7 @@ These run the actual registry files -- not fixtures -- through the same
 validation and install path the API uses, and check that each one decodes a
 frame it should recognise and rejects one it should not.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_registry_plugins.py -v
+Run:  .venv/bin/python -m pytest tests/test_registry_plugins.py -v
 """
 import asyncio
 import json

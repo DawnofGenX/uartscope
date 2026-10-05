@@ -15,7 +15,7 @@ A real RS-485 master frames a response by a 3.5-character silent inter-frame
 gap and sends NO terminator at all, so a correct reader accumulates bytes and
 emits a frame when the line goes quiet.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_binary_framing.py -v
+Run:  .venv/bin/python -m pytest tests/test_binary_framing.py -v
 """
 import asyncio
 import sys

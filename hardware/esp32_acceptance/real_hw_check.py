@@ -21,6 +21,7 @@ import asyncio
 import sys
 import time
 from collections import Counter
+from pathlib import Path
 
 try:
     import serial
@@ -84,15 +85,26 @@ async def main():
                              stopbits=(serial.STOPBITS_TWO if A.stopbits == 2
                                        else serial.STOPBITS_ONE))
     except Exception as e:
-        sys.exit(f"cannot open {A.port}: {e}\n"
-                 "Is the board plugged in, and attached to WSL via usbipd?")
+        sys.exit(
+            f"cannot open {A.port}: {e}\n\n"
+            "Check, in order:\n"
+            "  1. the board is plugged in and the OS reports it:\n"
+            "     python -c \"import serial.tools.list_ports as lp; "
+            "print([p.device for p in lp.comports()])\"\n"
+            "  2. you have permission to open it (Linux: group dialout; "
+            "macOS: use the /dev/cu.* node, not /dev/tty.*)\n"
+            "  3. the driver for its USB bridge chip is installed\n"
+            "     -- CH340 and CP210x in particular need one on Windows\n"
+            "  4. --port names the right device: /dev/ttyUSB* for CH340/FTDI/CP210x, "
+            "/dev/ttyACM* for native-USB boards such as the ESP32-S3 and C3"
+        )
 
     got = []
 
     async def on_data(device_id, session_id, line):
         got.append(line)
 
-    sys.path.insert(0, "/home/hermes/uartscope/backend")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
     from app.core.device_manager import DeviceInfo          # noqa: E402
     from app.core.serial_reader import SerialReader          # noqa: E402
     from app.models import DeviceCreate                      # noqa: E402

@@ -16,7 +16,7 @@ Two bugs are pinned here:
    start_device for that device is a silent no-op that only logs a warning.
    The device is permanently bricked.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_terminal_callback_contract.py -v
+Run:  .venv/bin/python -m pytest tests/test_terminal_callback_contract.py -v
 """
 import ast
 import asyncio

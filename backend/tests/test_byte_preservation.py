@@ -3,7 +3,7 @@
 The reader must not destroy binary protocol frames (Modbus/CAN/I2C/SPI)
 by UTF-8 decoding them before downstream consumers see them.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_byte_preservation.py -v
+Run:  .venv/bin/python -m pytest tests/test_byte_preservation.py -v
 """
 import asyncio
 import os

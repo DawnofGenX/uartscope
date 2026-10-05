@@ -14,7 +14,7 @@ The plugin is loaded from a file on disk and validated against the
 `ProtocolDecoder` interface before it is registered, because a plugin is
 third-party code that will run inside the decode path.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_plugin_marketplace.py -v
+Run:  .venv/bin/python -m pytest tests/test_plugin_marketplace.py -v
 """
 import asyncio
 import json

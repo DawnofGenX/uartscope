@@ -4,7 +4,7 @@ Real RS-485 sensors (Modbus RTU) commonly use 8E1 (8 data bits, even
 parity, 1 stop bit). The app hardcoded 8N1, so every frame failed CRC
 against a device configured for 8E1.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_parity_stopbits.py -v
+Run:  .venv/bin/python -m pytest tests/test_parity_stopbits.py -v
 """
 import asyncio
 import os

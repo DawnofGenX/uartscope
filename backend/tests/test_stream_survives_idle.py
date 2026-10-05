@@ -23,7 +23,7 @@ comment above the handler claimed to prevent.
 This test pins the behaviour that matters: an idle queue must not end the loop,
 and a real failure must be reported in a way that survives having no slot.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_stream_survives_idle.py -v
+Run:  .venv/bin/python -m pytest tests/test_stream_survives_idle.py -v
 """
 import asyncio
 import sys

@@ -5,7 +5,7 @@ These tests pin the current state of each key so that:
 - A key that is deleted stays deleted (the test fails if it reappears).
 - The default values are explicit and deliberate.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_config_keys.py -v
+Run:  .venv/bin/python -m pytest tests/test_config_keys.py -v
 """
 import sys
 from pathlib import Path

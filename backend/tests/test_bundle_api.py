@@ -6,7 +6,7 @@ no way to export one, so the shareable format was not actually shareable.
 
 These test the route end to end against a real recorded session.
 
-Run:  ../.venv-v2/bin/python -m pytest tests/test_bundle_api.py -v
+Run:  .venv/bin/python -m pytest tests/test_bundle_api.py -v
 """
 import io
 import json

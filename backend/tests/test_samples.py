@@ -8,7 +8,7 @@ Each `expects` block is asserted against the real decoder and the real
 telemetry parser. A sample whose hex does not match its line, or whose expected
 protocol is not what auto-detect returns, fails here.
 
-Run:  ../.venv-v2/bin/python tests/test_samples.py
+Run:  .venv/bin/python tests/test_samples.py
 """
 import json
 import sys

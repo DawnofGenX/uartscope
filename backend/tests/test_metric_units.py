@@ -6,8 +6,8 @@ leave `unit` empty for the bare form ("TEMP:23.4") even though the JSON path
 already inferred it, which is why the dashboard could not separate degrees from
 decibels.
 
-Run:  .venv-v2/bin/python -m pytest backend/tests/test_metric_units.py -q
-      (or directly: .venv-v2/bin/python backend/tests/test_metric_units.py)
+Run:  .venv/bin/python -m pytest backend/tests/test_metric_units.py -q
+      (or directly: .venv/bin/python backend/tests/test_metric_units.py)
 """
 import asyncio
 import sys

@@ -12,8 +12,9 @@ import os
 import pty
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, "/home/hermes/uartscope/backend")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 
 import serial                                                    # noqa: E402
 from app.core.device_manager import DeviceInfo                   # noqa: E402
