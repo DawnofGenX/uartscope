@@ -189,15 +189,22 @@ async def main():
 
         async def ws_client():
             import websockets
-            uri = f"ws://127.0.0.1:{PORT}/ws/telemetry"
+            # The router is mounted with prefix="/api", so the path is /api/ws/
+            # telemetry -- not /ws/telemetry. frontend/src/api/websocket.ts
+            # builds the same URL from window.location.host.
+            uri = f"ws://127.0.0.1:{PORT}/api/ws/telemetry"
             try:
                 async with websockets.connect(uri) as ws:
-                    if A.protocol:
-                        try:
-                            await ws.send(json.dumps(
-                                {"type": "subscribe", "device_id": device_id}))
-                        except Exception:
-                            pass
+                    # The documented message types are subscribe_device,
+                    # subscribe_all and unsubscribe. Sending "subscribe" is
+                    # silently ignored, so the client receives nothing and a
+                    # naive check ("did we get any message?") still passes.
+                    try:
+                        await ws.send(json.dumps(
+                            {"type": "subscribe_device",
+                             "device_id": device_id}))
+                    except Exception as e:
+                        ws_messages.append({"_subscribe_failed": str(e)})
                     end = time.time() + 8
                     while time.time() < end:
                         try:
@@ -209,7 +216,9 @@ async def main():
                         try:
                             ws_messages.append(json.loads(raw))
                         except Exception:
-                            ws_messages.append({"raw": str(raw)[:200]})
+                            ws_messages.append({"type": "_nonjson",
+                                                "raw": str(raw)[:200]})
+
             except Exception as e:
                 ws_messages.append({"_ws_error": str(e)})
 
@@ -307,15 +316,23 @@ async def main():
         stop.set()
         await asyncio.wait_for(task, timeout=5)
 
-        metric_msgs = [m for m in ws_messages
-                       if m.get("type") == "metric"]
-        serial_msgs = [m for m in ws_messages
-                       if m.get("type") == "serial_data"]
-        check("websocket delivered messages to a real client",
-              len(ws_messages) > 0,
-              f"{len(ws_messages)} messages: "
-              f"{len(metric_msgs)} metric, {len(serial_msgs)} serial_data, "
-              f"types={sorted({m.get('type') for m in ws_messages})[:6]}")
+        metric_msgs = [m for m in ws_messages if m.get("type") == "metric"]
+        serial_msgs = [m for m in ws_messages if m.get("type") == "serial_data"]
+        alert_msgs = [m for m in ws_messages if m.get("type") == "alert"]
+        check("websocket delivered real telemetry to a subscribed client",
+              len(metric_msgs) > 0 and len(serial_msgs) > 0,
+              f"{len(ws_messages)} messages: {len(metric_msgs)} metric, "
+              f"{len(serial_msgs)} serial_data, "
+              f"types={sorted({m.get('type') or '?' for m in ws_messages})[:8]}"
+              + (f"\n        sample metric: {metric_msgs[0]}" if metric_msgs else "")
+              + (f"\n        sample serial : {str(serial_msgs[0])[:110]}"
+                 if serial_msgs else ""))
+
+        check("a triggered alert was pushed over the websocket",
+              len(alert_msgs) > 0,
+              f"{len(alert_msgs)} alert frame(s); the alert fix must reach the "
+              f"browser, not just the REST history"
+              + (f"\n        {str(alert_msgs[0])[:150]}" if alert_msgs else ""))
 
         # ---- stop, then confirm the device is reusable (the brick bug) ----
         status, _ = api("POST", f"/api/devices/{device_id}/stop")
