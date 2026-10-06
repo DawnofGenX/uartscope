@@ -19,6 +19,7 @@ from app.api.routes.protocols import router as protocols_router
 from app.api.routes.websocket import router as ws_router, setup_telemetry_pipeline
 from app.api.routes.performance import router as performance_router
 from app.api.routes.mqtt import router as mqtt_router
+from app.api.routes.firmware import router as firmware_router
 from app.api.routes import marketplace as marketplace_routes
 from app.core.device_manager import device_manager
 from app.core.serial_reader import serial_reader
@@ -185,6 +186,7 @@ app.include_router(protocols_router, prefix="/api")
 app.include_router(ws_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
 app.include_router(mqtt_router, prefix="/api")
+app.include_router(firmware_router)
 app.include_router(marketplace_routes.router, prefix="/api")
 
 
