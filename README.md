@@ -26,6 +26,7 @@ Node.js, no build step, no browser install.
 | Alerts | Rule-based conditions (`>`, `<`, `>=`, `<=`, `==`, range, rate-of-change) with per-rule cooldown and an alert history with acknowledgment |
 | Sessions | Record, replay, diff against a golden baseline, and export JSON/CSV; share as `.uartscope` bundles from the desktop app or `GET /api/export/session/{id}/bundle` |
 | Protocol decoders | Six built-ins — UART Text, Modbus RTU, I2C, SPI, CAN Bus, CAN DBC — all with encode as well as decode |
+| Firmware flashing | Compile and flash ESP32 sketches from the desktop app |
 | Plugin marketplace | Install real third-party decoders from a registry manifest; `registry/registry.json` ships LIN, J1939 and DALI. Validation, persistence and uninstall are implemented |
 | MQTT | Multi-broker profiles, pub/sub, message history (backend API is live; the MQTT screen is still on the v1 UI — see below) |
 | REST + WebSocket API | FastAPI backend on :8080 with ~50 verified routes; the OpenAPI schema at `/docs` lists them all |
