@@ -3764,10 +3764,7 @@ def firmware_page():
         """Populate example dropdown from the hardware/examples directory."""
         options = {}
         try:
-            examples_dir = (
-                Path(__file__).resolve().parent
-                / 'backend' / 'hardware' / 'examples'
-            )
+            examples_dir = Path('hardware/examples')
             if examples_dir.exists():
                 for protocol_dir in sorted(examples_dir.iterdir()):
                     if protocol_dir.is_dir():
