@@ -377,6 +377,22 @@ gap framing.
 `verify_checker_discriminates.py` proves the checker can actually tell a working
 reader from a broken one, by replaying the same bytes through both.
 
+### Flashing firmware
+
+UARTScope can compile and flash ESP32 firmware. Open the Firmware tab in the
+desktop app, select your board and port, then choose an example or provide
+your own `.ino` or `.bin` file.
+
+The first time you flash, UARTScope will automatically install arduino-cli
+and the ESP32 board core. This is a one-time download.
+
+Example sketches are in `hardware/examples/`:
+- `uart/uart_echo.ino` — basic UART echo
+- `i2c/i2c_scanner.ino` — I2C bus scanner
+- `spi/spi_loopback.ino` — SPI loopback test
+- `can/can_sender.ino` — CAN frame sender
+- `modbus/modbus_slave.ino` — Modbus RTU slave
+
 ### Where did the long-form guides go?
 
 The twelve markdown guides were removed because they were written for v2.0.1 and

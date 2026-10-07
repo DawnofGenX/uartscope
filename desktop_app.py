@@ -34,6 +34,9 @@ from app.core.websocket_hub import ws_manager
 from app.core.protocol_decoder import protocol_manager
 from app.core.performance_tracker import performance_tracker
 from app.core.mqtt_client import mqtt_manager
+from app.core.board_detector import SUPPORTED_BOARDS, detect_board
+from app.core.firmware_compiler import compile_sketch, find_compiled_bin
+from app.core.firmware_flasher import flash_firmware
 from app.models import DeviceCreate
 
 logger = logging.getLogger(__name__)
@@ -158,6 +161,7 @@ NAV_ITEMS = [
     ('sessions', 'sessions', 'Sessions', True),
     ('decoder', 'decoder', 'Decoder', True),
     ('marketplace', 'marketplace', 'Marketplace', False),
+    ('firmware', 'firmware', 'Firmware', True),
 ]
 
 NAV_TAB_IDS = {tid for tid, *_ in NAV_ITEMS}
@@ -3704,6 +3708,267 @@ def decoder_page():
         _bind_decoder_page('show_dbc_upload_dialog', _show_dbc_upload_dialog_impl)
         _bind_decoder_page('toggle_live', _toggle_live_impl)
 
+def firmware_page():
+    """Firmware: compile and flash ESP32 firmware.
+
+    Provides board selection, port selection, example/custom firmware source
+    tabs, and a flash button with progress display. Calls backend modules
+    directly (compile_sketch, flash_firmware) following the same pattern as
+    every other page in this app.
+    """
+    container = ui.column().classes('w-full gap-4 p-4')
+
+    # ── State ───────────────────────────────────────────────────────────
+    board_select = None
+    port_select = None
+    example_select = None
+    custom_path_label = None
+    flash_btn = None
+    progress = None
+    status_label = None
+    source_tabs = None
+    active_source = {'tab': 'examples'}
+
+    def _populate_boards():
+        """Populate board dropdown from SUPPORTED_BOARDS + detected boards."""
+        options = {}
+        for b in SUPPORTED_BOARDS:
+            options[b['fqbn']] = b['name']
+        try:
+            for d in detect_board():
+                label = f"{d['name']} ({d['port']})"
+                options[d['fqbn']] = label
+        except Exception:
+            pass
+        if board_select is not None:
+            board_select.options = options
+            board_select.value = next(iter(options), None)
+
+    def _populate_ports():
+        """Populate port dropdown from detected USB serial ports."""
+        options = {}
+        try:
+            import serial.tools.list_ports
+            for p in serial.tools.list_ports.comports():
+                label = f"{p.device}"
+                if p.description:
+                    label += f" — {p.description}"
+                options[p.device] = label
+        except Exception:
+            pass
+        if port_select is not None:
+            port_select.options = options
+            port_select.value = next(iter(options), None)
+
+    def _populate_examples():
+        """Populate example dropdown from the hardware/examples directory."""
+        options = {}
+        try:
+            examples_dir = Path('hardware/examples')
+            if examples_dir.exists():
+                for protocol_dir in sorted(examples_dir.iterdir()):
+                    if protocol_dir.is_dir():
+                        for ino in protocol_dir.glob('*.ino'):
+                            label = f"{protocol_dir.name}/{ino.stem}"
+                            options[str(ino.parent)] = label
+        except Exception:
+            pass
+        if example_select is not None:
+            example_select.options = options
+            example_select.value = next(iter(options), None)
+
+    def _on_tab_change(e):
+        active_source['tab'] = e.value
+
+    async def _do_flash():
+        """Compile (if needed) and flash firmware to the selected board."""
+        if flash_btn is None or progress is None or status_label is None:
+            return
+
+        fqbn = board_select.value if board_select else None
+        port = port_select.value if port_select else None
+
+        if not fqbn:
+            ui.notify('Select a board first', type='negative')
+            return
+        if not port:
+            ui.notify('Select a serial port first', type='negative')
+            return
+
+        source_path = None
+        is_custom_bin = False
+
+        if active_source['tab'] == 'examples':
+            if example_select is None or not example_select.value:
+                ui.notify('Select an example sketch', type='negative')
+                return
+            source_path = example_select.value
+        else:
+            # Custom tab — check for a file path
+            if custom_path_label is None:
+                return
+            raw = custom_path_label.text
+            if not raw or raw == 'No file selected':
+                ui.notify('Select a .ino or .bin file first', type='negative')
+                return
+            # Extract path from label text (format: "filename — path")
+            if ' — ' in raw:
+                source_path = raw.split(' — ', 1)[1]
+            else:
+                source_path = raw
+            is_custom_bin = source_path.endswith('.bin')
+
+        flash_btn.disable()
+        progress.value = 0
+        status_label.text = 'Starting...'
+
+        try:
+            bin_path = None
+
+            if is_custom_bin:
+                bin_path = Path(source_path)
+                status_label.text = 'Using pre-compiled binary'
+                progress.value = 30
+            else:
+                # Compile the sketch
+                status_label.text = 'Compiling...'
+                progress.value = 10
+                result = compile_sketch(Path(source_path), fqbn)
+                if result.returncode != 0:
+                    ui.notify(
+                        f'Compilation failed: {result.stderr[:200]}',
+                        type='negative')
+                    status_label.text = 'Compilation failed'
+                    progress.value = 0
+                    return
+
+                progress.value = 40
+                status_label.text = 'Finding binary...'
+                bin_path = find_compiled_bin(Path(source_path))
+                if bin_path is None:
+                    ui.notify(
+                        'Compilation succeeded but no .bin found',
+                        type='negative')
+                    status_label.text = 'No binary found'
+                    progress.value = 0
+                    return
+
+            # Flash
+            status_label.text = 'Flashing...'
+            progress.value = 60
+            result = flash_firmware(bin_path, port)
+            if result.returncode != 0:
+                ui.notify(
+                    f'Flash failed: {result.stderr[:200]}',
+                    type='negative')
+                status_label.text = 'Flash failed'
+                progress.value = 0
+                return
+
+            progress.value = 100
+            status_label.text = 'Flash complete!'
+            ui.notify('Firmware flashed successfully', type='positive')
+
+        except Exception as e:
+            ui.notify(f'Flash error: {e}', type='negative')
+            status_label.text = f'Error: {e}'
+            progress.value = 0
+        finally:
+            if flash_btn is not None:
+                flash_btn.enable()
+
+    def _on_upload(e):
+        """Handle file upload for custom firmware."""
+        if custom_path_label is None:
+            return
+        name = e.name
+        content = e.content.read()
+        # Save to a temp location
+        import tempfile
+        tmp_dir = Path(tempfile.mkdtemp(prefix='firmware_'))
+        tmp_path = tmp_dir / name
+        tmp_path.write_bytes(content)
+        custom_path_label.text = f"{name} — {tmp_path}"
+        ui.notify(f'Loaded {name}', type='info')
+
+    # ── Build UI ────────────────────────────────────────────────────────
+    with container:
+        ui.label('Firmware Flashing').classes('text-2xl font-bold')
+        ui.label(
+            'Compile and flash ESP32 firmware. Select a board, port, and '
+            'firmware source, then click Flash.'
+        ).classes('text-sm opacity-70')
+
+        # Board selection
+        with ui.card().classes('w-full p-4'):
+            ui.label('Board').classes('text-sm font-semibold')
+            board_select = ui.select(
+                options={},
+                value=None,
+                label='Select board',
+            ).classes('w-full').props('outlined dense')
+            _populate_boards()
+
+        # Port selection
+        with ui.card().classes('w-full p-4'):
+            ui.label('Serial Port').classes('text-sm font-semibold')
+            port_select = ui.select(
+                options={},
+                value=None,
+                label='Select port',
+            ).classes('w-full').props('outlined dense')
+            _populate_ports()
+            ui.button(
+                'Refresh Ports',
+                on_click=lambda: _populate_ports(),
+            ).classes('mt-2')
+
+        # Firmware source tabs
+        with ui.card().classes('w-full p-4'):
+            ui.label('Firmware Source').classes('text-sm font-semibold')
+            source_tabs = ui.tabs().classes('w-full')
+            with source_tabs:
+                ui.tab('Examples')
+                ui.tab('Custom')
+
+            with ui.tab_panels(source_tabs, value='Examples').classes('w-full mt-2'):
+                with ui.tab_panel('Examples'):
+                    example_select = ui.select(
+                        options={},
+                        value=None,
+                        label='Select example',
+                    ).classes('w-full').props('outlined dense')
+                    _populate_examples()
+
+                with ui.tab_panel('Custom'):
+                    ui.label(
+                        'Upload a .ino sketch (will be compiled) or a '
+                        'pre-compiled .bin file.'
+                    ).classes('text-xs opacity-70')
+                    ui.upload(
+                        on_upload=_on_upload,
+                        multiple=False,
+                    ).classes('w-full')
+                    custom_path_label = ui.label(
+                        'No file selected'
+                    ).classes('text-xs opacity-70 mt-1')
+
+            source_tabs.on('update:model-value', _on_tab_change)
+
+        # Flash controls
+        with ui.card().classes('w-full p-4'):
+            ui.label('Flash').classes('text-sm font-semibold')
+            flash_btn = ui.button(
+                'Flash Firmware',
+                on_click=_do_flash,
+            ).classes('w-full').props('color=primary')
+            progress = ui.linear_progress(
+                value=0,
+                show_value=False,
+            ).classes('w-full mt-2')
+            status_label = ui.label('Ready').classes('text-xs opacity-70 mt-1')
+
+
 def rebuild():
     """Rebuild the entire UI."""
     global content_container
@@ -3735,6 +4000,8 @@ def render_content():
         marketplace_page()
     elif current_tab == 'decoder':
         decoder_page()
+    elif current_tab == 'firmware':
+        firmware_page()
 
 def switch_tab(tab_id):
     global current_tab

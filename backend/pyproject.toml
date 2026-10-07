@@ -23,6 +23,7 @@ dependencies = [
     # every manifest, so the main product could not be imported after install.
     "nicegui>=3.17.0",
     "aiomqtt>=2.3.0",
+    "esptool>=4.7",
 ]
 
 [project.optional-dependencies]

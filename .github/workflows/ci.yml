@@ -98,6 +98,12 @@ jobs:
           pip install pyyaml
           python check_handler_order.py
           python check_dict_keys.py
+          # A nav item whose icon name is not in uartscope_theme.ICONS raises
+          # KeyError inside build_sidebar(), which renders on every page -- so
+          # one bad string 500s every screen. The Firmware tab shipped that way
+          # and the app still answered / with 200. Catch it here, where the
+          # message names the line, instead of in a browser.
+          python check_nav_icons.py
           # Exits 1 if a recorded contrast ratio has drifted from the computed
           # one, or if any documented pair fails its WCAG verdict.
           python -m uartscope_theme --audit
