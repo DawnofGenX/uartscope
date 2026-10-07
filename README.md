@@ -88,7 +88,7 @@ curl http://127.0.0.1:8080/api/health
 ```
 
 ```json
-{"status":"healthy","version":"2.1.0","devices":{"total":0,"connected":0,"streaming":0,"errors":0,"total_bytes_received":0,"total_packets":0},"active_sessions":0,"websocket_clients":0}
+{"status":"healthy","version":"2.2.0","devices":{"total":0,"connected":0,"streaming":0,"errors":0,"total_bytes_received":0,"total_packets":0},"active_sessions":0,"websocket_clients":0}
 ```
 
 ### Docker

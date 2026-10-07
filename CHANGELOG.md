@@ -5,6 +5,47 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-10-07
+
+### Added
+
+- **Firmware flashing, end to end.** UARTScope can now compile and flash
+  ESP32 firmware without leaving the app. The first release of this project
+  could only watch bytes a board already sent; now it can put a board into the
+  state you want to watch.
+
+  - **Board detection** maps USB VID/PID pairs to arduino-cli FQBNs for common
+    ESP32 boards, so a plugged-in board is recognised rather than guessed. A
+    dropdown override covers anything the map misses.
+  - **Toolchain bootstrap**: `arduino-cli` and `esptool` install themselves on
+    first use (cached under `~/.uartscope/tools/`), and the ESP32 core installs
+    on first compile. No manual toolchain setup.
+  - **Compile + flash pipeline**: `POST /api/firmware/compile` and
+    `POST /api/firmware/flash`, with `GET /api/firmware/boards` and
+    `GET /api/firmware/examples` for discovery. The desktop app gains a
+    Firmware tab for board, port and file selection.
+  - **Five example sketches** in `hardware/examples/`, one per protocol the
+    app decodes: `uart_echo`, `i2c_scanner`, `spi_loopback`, `can_sender`,
+    `modbus_slave`. Each is a worked example of the traffic its decoder
+    handles, so the demo works out of the box on hardware you already own.
+
+### Fixed
+
+- **Every screen was dead in CI before the first firmware commit shipped.**
+  The Firmware tab's nav entry referenced an icon name that did not exist in
+  `uartscope_theme.ICONS`. Because `build_sidebar()` renders on every page,
+  the `KeyError` 500'd all 13 screens — while the app still answered `/`
+  health checks with 200, so nothing upstream looked broken until CI booted
+  the real app and walked every page. The icon was added and two permanent
+  guards landed with it:
+  - `check_nav_icons.py` validates every `NAV_ITEMS` icon against `ICONS` at
+    build time, wired into the static-checks CI step, where the failure names
+    the offending line instead of surfacing as a wall of 500s.
+  - `smoke_pages.py` now derives its page list from `NAV_ITEMS` via `ast`
+    parsing. Adding a nav item can no longer silently skip its own screen
+    coverage — the previous hardcoded list is exactly how a broken screen kept
+    passing smoke tests.
+
 ## [2.1.0] — 2026-10-05
 
 ### Added
