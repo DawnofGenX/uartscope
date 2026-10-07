@@ -254,6 +254,14 @@ ICONS: dict[str, str] = {
         '<path d="M3.5 6.5h17l-1.5 11h-14l-1.5-11z"/>'
         '<path d="M8.5 9.5V6a3.5 3.5 0 017 0v3.5"/>'
     ),
+    # Firmware: a chip being WRITTEN to -- the arrow crossing the package is the
+    # "upload/program" affordance. A plain chip would be indistinguishable from
+    # the decoder icon, which already reads as hardware.
+    "firmware": (
+        '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/>'
+        '<path d="M12 3.5v3M12 17.5v3M3.5 12h3M17.5 12h3"/>'
+        '<path d="M9.5 12h5M12 9.5v5"/>'
+    ),
 }
 
 

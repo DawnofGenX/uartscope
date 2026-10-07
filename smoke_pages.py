@@ -18,10 +18,12 @@ Two modes:
 listening, which in CI is nothing.
 """
 import argparse
+import ast
 import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -37,10 +39,40 @@ _ARGS = _P.parse_args()
 BASE = _ARGS.base_url.rstrip('/')
 
 # Tabs reachable by query param, and the device state each needs exercised.
-TABS = [
-    'devices', 'terminal', 'charts', 'performance', 'mqtt',
-    'alerts', 'sessions', 'decoder', 'marketplace',
-]
+#
+# Derived from desktop_app.NAV_ITEMS, not hand-listed. Firmware shipped with a
+# nav item that made build_sidebar() raise, which 500'd all thirteen screens --
+# and the screen that caused it was never probed, because adding it to the rail
+# did not add it here. A hand-maintained mirror of a list that lives in another
+# module is a list that goes stale silently; reading the real one makes that
+# impossible.
+def _nav_tabs() -> list[str]:
+    """Read the tab ids straight out of desktop_app.NAV_ITEMS.
+
+    Parsed with ast rather than imported: smoke_pages.py runs in whatever
+    environment the app runs in, and importing the 4400-line desktop_app just
+    to read one list would drag in nicegui and the whole backend.
+    """
+    src = (Path(__file__).resolve().parent / 'desktop_app.py').read_text(
+        encoding='utf-8')
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(getattr(t, 'id', None) == 'NAV_ITEMS' for t in node.targets):
+            continue
+        if not isinstance(node.value, (ast.List, ast.Tuple)):
+            continue
+        tabs = []
+        for elt in node.value.elts:
+            if isinstance(elt, ast.Tuple) and elt.elts \
+                    and isinstance(elt.elts[0], ast.Constant):
+                tabs.append(elt.elts[0].value)
+        return tabs
+    raise SystemExit('smoke_pages: no NAV_ITEMS list found in desktop_app.py')
+
+
+TABS = _nav_tabs()
 
 EXPECT_MARKERS = {
     # A page that renders 200 but is actually the error page is still a failure.

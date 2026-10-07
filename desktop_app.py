@@ -161,7 +161,7 @@ NAV_ITEMS = [
     ('sessions', 'sessions', 'Sessions', True),
     ('decoder', 'decoder', 'Decoder', True),
     ('marketplace', 'marketplace', 'Marketplace', False),
-    ('firmware', 'memory', 'Firmware', True),
+    ('firmware', 'firmware', 'Firmware', True),
 ]
 
 NAV_TAB_IDS = {tid for tid, *_ in NAV_ITEMS}
