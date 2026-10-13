@@ -138,3 +138,5 @@ Lint is `ruff check app/ --line-length=120 --select E9,F63,F7,F82` from
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+More writing on this stack: https://dev.to/dawnofgenx
