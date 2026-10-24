@@ -26,8 +26,12 @@ jobs:
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
-          pip install -e ".[dev]"
+          # The dev lock pins every runtime and test dependency at the version this suite
+          # was verified against. Installing the package with --no-deps keeps the lock the
+          # only source of versions; before this, CI resolved from `>=` ranges and could
+          # test a dependency tree no user could reproduce.
+          pip install -r requirements-dev.lock
+          pip install -e . --no-deps
 
       - name: Lint with ruff
         run: |
@@ -112,7 +116,7 @@ jobs:
         run: |
           # Boots the real app and requests every page, so a screen that
           # raises during render fails the build rather than the user.
-          pip install -r backend/requirements.txt
+          pip install -r backend/requirements.lock
           python smoke_pages.py --boot --wait 60
 
   docker:
@@ -154,7 +158,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          cd backend; pip install -r requirements.txt
+          cd backend; pip install -r requirements.lock
           # nicegui used to be pinned here because the manifests omitted it; it
           # is a declared dependency now. pyinstaller is build-only and stays.
           pip install pyinstaller

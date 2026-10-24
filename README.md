@@ -56,13 +56,33 @@ git clone https://github.com/DawnofGenX/uartscope.git
 cd uartscope
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt
+pip install -r backend/requirements.lock
 python desktop_app.py
 ```
 
 Open **http://localhost:3000**. That is the whole app: `desktop_app.py` imports
 the backend modules in-process and serves the UI itself. You do **not** need to
 run uvicorn separately for local use.
+
+### Reproducible installs
+
+`backend/requirements.lock` (runtime) and `backend/requirements-dev.lock` (adds
+pytest, pytest-asyncio, pytest-httpx) pin **every** dependency at an exact version, generated
+from `backend/pyproject.toml`. CI, both Dockerfiles and the command above all install from a
+lock, so the environment you get is the environment that was tested.
+
+Before this, there were two hand-maintained manifests that disagreed: `esptool` (firmware
+flashing) was declared in `pyproject.toml` but missing from `requirements.txt`, so the Docker
+images — which installed `requirements.txt` — shipped without it, and a fresh clone resolved
+every dependency to "whatever is latest today".
+
+Regenerate after changing dependencies in `backend/pyproject.toml`:
+
+```bash
+cd backend
+uv pip compile pyproject.toml -o requirements.lock
+uv pip compile pyproject.toml --extra dev -o requirements-dev.lock
+```
 
 No board handy? Simulate one in a second terminal:
 

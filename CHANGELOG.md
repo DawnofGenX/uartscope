@@ -5,6 +5,29 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A fresh clone could install a dependency tree nobody had tested — and the Docker
+  images were missing a declared dependency.** The repo carried two hand-maintained
+  manifests that disagreed: `backend/pyproject.toml` declared `esptool>=4.7` (the
+  firmware-flashing feature) while `backend/requirements.txt` did not, and both
+  Dockerfiles installed only `requirements.txt`. So the images shipped without the
+  dependency the v2.2.0 headline feature needs, and every `>=` range resolved to
+  "whatever is latest today" — CI tested one tree, a user got another.
+
+  `requirements.txt` is gone. `backend/requirements.lock` (runtime) and
+  `backend/requirements-dev.lock` (adds pytest, pytest-asyncio, pytest-httpx) are
+  generated from `pyproject.toml` by `uv pip compile` and pin all 67/73 packages
+  exactly. CI, both Dockerfiles and the README quick start all install from a lock;
+  CI installs the package with `--no-deps` so the lock remains the only source of
+  versions.
+
+  Verified, not assumed: a clean virtualenv built from the runtime lock passes the
+  full suite (247 tests), and so does the same environment with the dev lock installed
+  on top.
+
 ## [2.2.0] — 2026-10-07
 
 ### Added
