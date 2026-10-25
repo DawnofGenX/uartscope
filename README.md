@@ -15,6 +15,12 @@ replayable sessions, and decodes raw bus traffic (UART text, Modbus RTU, I2C,
 SPI, CAN, CAN with a DBC file). The desktop app is pure Python (NiceGUI) — no
 Node.js, no build step, no browser install.
 
+> **On `frontend/`:** the repo still contains a React/Vite prototype from v1. Nothing in the
+> shipped product uses it — `desktop_app.py` serves the UI itself, and no Dockerfile, launcher
+> or CI job builds or copies it. It is parked, not supported; the "no Node.js" statement above
+> describes the app you install, and this note exists so the tree does not appear to contradict
+> it. Say the word and it gets deleted.
+
 ![Live charts with five telemetry series grouped by unit](docs/images/04-charts.png)
 
 ## What it does
