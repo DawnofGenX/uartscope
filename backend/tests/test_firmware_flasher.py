@@ -23,23 +23,33 @@ def _make_completed_process(returncode=0, stdout="", stderr=""):
 
 
 def test_flash_firmware_calls_esptool(tmp_path):
-    """flash_firmware invokes esptool with correct arguments."""
+    """flash_firmware invokes esptool with correct arguments.
+
+    Pins the module-fallback branch (no esptool on PATH) so the assertion is
+    deterministic regardless of the test environment; the PATH branch is
+    covered end-to-end in test_firmware_flash_e2e.py.
+    """
     bin_file = tmp_path / "firmware.bin"
     bin_file.write_bytes(b"\x00" * 100)
 
     mock_proc = _make_completed_process(returncode=0, stdout="ok", stderr="")
 
-    with patch("subprocess.run", return_value=mock_proc) as mock_run:
+    with patch("subprocess.run", return_value=mock_proc) as mock_run, \
+         patch("app.core.firmware_flasher.shutil.which", return_value=None):
         result = flash_firmware(bin_file, "/dev/ttyUSB0")
 
     assert result.returncode == 0
     mock_run.assert_called_once()
 
     cmd = mock_run.call_args[0][0]
-    assert "esptool" in cmd
-    assert "write_flash" in cmd
-    assert "/dev/ttyUSB0" in cmd
-    assert str(bin_file) in cmd
+    assert cmd[:3] == [sys.executable, "-m", "esptool"]
+    assert cmd[3:] == [
+        "--port", "/dev/ttyUSB0",
+        "--baud", "921600",
+        "write_flash",
+        "0x1000",
+        str(bin_file),
+    ]
 
 
 def test_flash_firmware_default_baud(tmp_path):

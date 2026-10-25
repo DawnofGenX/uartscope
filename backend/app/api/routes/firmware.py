@@ -69,13 +69,21 @@ def compile_firmware(req: CompileRequest):
 @router.post("/flash")
 def flash_firmware(req: FlashRequest):
     """Flash a .bin file to a device."""
+    import subprocess
+
     from app.core.firmware_flasher import flash_firmware
 
     bin_path = Path(req.bin_path)
     if not bin_path.exists():
         raise HTTPException(404, "Binary file not found")
 
-    result = flash_firmware(bin_path, req.port, req.baud)
+    try:
+        result = flash_firmware(bin_path, req.port, req.baud)
+    except subprocess.TimeoutExpired as e:
+        detail = f"Flash timed out after {e.timeout}s"
+        if e.stderr:
+            detail += f": {e.stderr.strip()}"
+        raise HTTPException(500, detail)
     if result.returncode != 0:
         raise HTTPException(500, f"Flash failed: {result.stderr}")
 
