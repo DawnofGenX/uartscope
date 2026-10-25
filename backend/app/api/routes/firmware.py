@@ -49,13 +49,23 @@ def list_examples():
 @router.post("/compile")
 def compile_firmware(req: CompileRequest):
     """Compile a sketch to .bin."""
+    import subprocess
+
     from app.core.firmware_compiler import compile_sketch, find_compiled_bin
 
     sketch_dir = Path(req.sketch_dir)
     if not sketch_dir.exists():
         raise HTTPException(404, "Sketch directory not found")
 
-    result = compile_sketch(sketch_dir, req.fqbn)
+    try:
+        result = compile_sketch(sketch_dir, req.fqbn)
+    except subprocess.TimeoutExpired as e:
+        # Mirrors the flash route: a hung toolchain is a 500 with a time, not a request that
+        # never returns.
+        detail = f"Compile timed out after {e.timeout}s"
+        if e.stderr:
+            detail += f": {e.stderr.strip()}"
+        raise HTTPException(500, detail)
     if result.returncode != 0:
         raise HTTPException(500, f"Compilation failed: {result.stderr}")
 

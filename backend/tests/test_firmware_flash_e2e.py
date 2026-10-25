@@ -240,3 +240,56 @@ class TestCompileE2E:
 
         assert result.returncode == 2
         assert "simulated failure (chip not in download mode)" in result.stderr
+
+    def test_compile_hang_reported_as_timeout(self, tmp_path, stub_bin, monkeypatch):
+        """A hung arduino-cli raises instead of holding the caller forever.
+
+        This is the compile-side twin of the flash timeout: before it, a stuck
+        toolchain would block the HTTP request with no bound at all.
+        """
+        _, log = stub_bin
+        sketch_dir = tmp_path / "sketch"
+        sketch_dir.mkdir()
+        (sketch_dir / "sketch.ino").write_text("void setup(){}\nvoid loop(){}\n")
+        monkeypatch.setenv("STUB_MODE", "hang")
+        monkeypatch.setenv("STUB_HANG_SECONDS", "60")
+
+        with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+            compile_sketch(sketch_dir, "esp32:esp32:esp32", timeout=1)
+
+        assert exc_info.value.timeout == 1
+
+
+class TestCompileApiE2E:
+    """POST /api/firmware/compile must bound the toolchain, like the flash route does."""
+
+    @pytest.fixture
+    def client(self, tmp_path, stub_bin):
+        import tempfile
+
+        db_dir = tempfile.mkdtemp(prefix="uartscope-compile-e2e-")
+        os.environ["UARTSCOPE_DATABASE_URL"] = f"sqlite+aiosqlite:///{db_dir}/test.db"
+
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        with TestClient(app) as c:
+            yield c
+
+    def test_compile_api_surfaces_timeout(self, client, tmp_path, stub_bin, monkeypatch):
+        """A hung arduino-cli yields a 500 'timed out', not a hung request."""
+        sketch_dir = tmp_path / "sketch"
+        sketch_dir.mkdir()
+        (sketch_dir / "sketch.ino").write_text("void setup(){}\nvoid loop(){}\n")
+        monkeypatch.setenv("STUB_MODE", "hang")
+        monkeypatch.setenv("STUB_HANG_SECONDS", "60")
+        import app.core.firmware_compiler as compiler
+        monkeypatch.setattr(compiler, "DEFAULT_COMPILE_TIMEOUT", 1.0)
+
+        resp = client.post("/api/firmware/compile", json={
+            "sketch_dir": str(sketch_dir),
+            "fqbn": "esp32:esp32:esp32",
+        })
+
+        assert resp.status_code == 500
+        assert "timed out" in resp.json()["detail"].lower()

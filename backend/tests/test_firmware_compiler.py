@@ -6,7 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from app.core.firmware_compiler import compile_sketch, find_compiled_bin
+from app.core.firmware_compiler import (
+    DEFAULT_COMPILE_TIMEOUT,
+    compile_sketch,
+    find_compiled_bin,
+)
 
 
 class TestCompileSketch:
@@ -28,6 +32,9 @@ class TestCompileSketch:
                 ['/fake/arduino-cli', 'compile', '--fqbn', fqbn, str(sketch_dir)],
                 capture_output=True,
                 text=True,
+                # A compile now carries a timeout: a hung arduino-cli used to hold the HTTP
+                # request open with no bound at all.
+                timeout=DEFAULT_COMPILE_TIMEOUT,
             )
             assert result is mock_completed
 

@@ -9,6 +9,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Firmware flashing could never work: the argv was unexecutable.** `flash_firmware` built
+  `["-m", "esptool", …]`, so `subprocess.run` tried to exec a binary literally named `-m` and
+  raised `FileNotFoundError: '-m'`. The v2.2.0 headline feature was dead on arrival, and the
+  mocked tests never executed the argv so nothing caught it. esptool is now resolved with
+  `shutil.which("esptool")` and falls back to `[sys.executable, "-m", "esptool"]`; the flash and
+  compile paths both carry a timeout, and both routes turn a hung toolchain into a 500 rather
+  than a request that never returns.
+- **The firmware verification was mocks all the way down.** `test_firmware_flash_e2e.py` now puts
+  real stub `esptool` / `arduino-cli` executables on `PATH` (files in a temp bin dir, not
+  monkeypatched `subprocess`), drives the production code, and asserts the exact argv that was
+  exec'd plus success, failure-with-stderr, and hang-as-timeout at both the function and API
+  level. No hardware is involved: the flasher passes the serial port string through and never
+  opens it.
+
 - **Neither Docker image could start.** Both Dockerfiles used `COPY backend/ app/`, which copies
   the *contents* of `backend/` into `./app/`, leaving the real package at `/app/app/app`. The
   backend image died with `Error loading ASGI app. Could not import module "app.main"` and the
