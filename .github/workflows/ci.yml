@@ -38,7 +38,10 @@ jobs:
           # --max-line-length is not a ruff flag; the flag is --line-length.
           # The old invocation exited 2 on the argument error, so this job had
           # never actually linted anything.
-          pip install ruff
+          # Pinned: ruff is a CI lint tool, not an app dependency, so it is not in
+          # the lock. Pinning it keeps the lint gate's behaviour reproducible
+          # instead of silently tracking whatever ruff is latest on the day.
+          pip install ruff==0.17.2
           cd backend && ruff check app/ --line-length=120 --select E9,F63,F7,F82
 
       - name: Test with pytest
@@ -99,7 +102,9 @@ jobs:
       # does not appear -- so they need their own gate.
       - name: Static checks
         run: |
-          pip install pyyaml
+          # pyyaml is already provided by the dev lock (installed in "Install
+          # dependencies"), so it is not re-installed here: a bare `pip install
+          # pyyaml` would resolve to latest and could upgrade it past the lock.
           python check_handler_order.py
           python check_dict_keys.py
           # A nav item whose icon name is not in uartscope_theme.ICONS raises
@@ -160,8 +165,11 @@ jobs:
           python -m pip install --upgrade pip
           cd backend; pip install -r requirements.lock
           # nicegui used to be pinned here because the manifests omitted it; it
-          # is a declared dependency now. pyinstaller is build-only and stays.
-          pip install pyinstaller
+          # is a declared dependency now. pyinstaller is build-only (not a runtime
+          # dep, so it is not in the lock) and stays a separate install — but pinned,
+          # because the .exe it produces is a release artifact and its version
+          # affects the build output.
+          pip install pyinstaller==6.22.3
 
       - name: Build Windows executable
         run: |

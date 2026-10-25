@@ -9,8 +9,14 @@ For the project as a whole, see the [root README](../README.md).
 ## Install
 
 ```bash
-pip install -e ".[dev]"
+pip install -r requirements-dev.lock
+pip install -e . --no-deps
 ```
+
+`requirements-dev.lock` pins every runtime and test dependency at the version the
+suite was verified against; `--no-deps` keeps the lock the only source of versions
+(installing the package normally would re-resolve from the `>=` ranges in
+`pyproject.toml` and silently undo the pin).
 
 `sqlalchemy[asyncio]` is deliberate. Plain `sqlalchemy` does not pull in
 `greenlet`, and the async engine raises on import without it, so a clean

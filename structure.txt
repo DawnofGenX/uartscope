@@ -45,7 +45,8 @@ uartscope/
 │   │   ├── test_device_manager.py
 │   │   ├── test_telemetry.py
 │   │   └── test_serial.py
-│   ├── requirements.txt
+│   ├── requirements.lock
+│   ├── requirements-dev.lock
 │   ├── pyproject.toml
 │   └── Dockerfile
 ├── frontend/
