@@ -11,8 +11,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.lock .
 RUN pip install --no-cache-dir -r requirements.lock
 
-COPY backend/ app/
+# The package must land at ./backend/app: desktop_app.py puts ./backend on sys.path (line 14)
+# before importing `app.*`, so the repo layout has to be preserved. `COPY backend/ app/` put the
+# contents at ./app/ instead, and the image died with ModuleNotFoundError: No module named
+# 'app.core'.
+COPY backend/ backend/
 COPY desktop_app.py .
+
+# desktop_app.py imports these two root-level modules directly (lines 18-19). They were never
+# copied in, so the image could not start: `python desktop_app.py` raised ImportError before
+# it bound a port. CI only *builds* this image and never runs it, so the gap was invisible
+# there — it was found by auditing the import closure and is now proven by running the image.
+COPY uartscope_follow.py uartscope_theme.py ./
+
+# Referenced at runtime rather than imported: the plugin marketplace reads registry/, and the
+# firmware screen lists sketches from hardware/examples.
+COPY registry/ registry/
+COPY hardware/examples/ hardware/examples/
 
 EXPOSE 3000
 

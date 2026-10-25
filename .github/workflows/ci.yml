@@ -137,6 +137,47 @@ jobs:
       - name: Build desktop Docker image
         run: docker build -f Dockerfile.desktop -t uartscope-desktop .
 
+      # Building an image proves it compiles, not that it starts. Both images shipped with a
+      # layout bug that only appears at runtime: `COPY backend/ app/` put the package at
+      # /app/app/app, so uvicorn could not import app.main and desktop_app.py raised
+      # ModuleNotFoundError: No module named 'app.core'. These steps run the images and probe
+      # them, which is the check that would have caught it.
+      - name: Run backend image and probe /docs
+        run: |
+          docker run -d --name ci-backend -p 18080:8080 uartscope-backend
+          code=""
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/docs || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::backend image did not serve /docs (last status: $code)"
+            docker logs ci-backend
+            exit 1
+          fi
+          # registry/ is copied in rather than packaged: prove the marketplace can see it.
+          curl -s http://127.0.0.1:18080/api/plugins | grep -q '"lin_ldf"' || {
+            echo "::error::plugin registry missing from the backend image"
+            docker logs ci-backend
+            exit 1
+          }
+
+      - name: Run desktop image and probe /
+        run: |
+          docker run -d --name ci-desktop -p 13000:3000 uartscope-desktop
+          code=""
+          for i in $(seq 1 45); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13000/ || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::desktop image did not serve / (last status: $code)"
+            docker logs ci-desktop
+            exit 1
+          fi
+
   build-windows:
     runs-on: windows-latest
     needs: test

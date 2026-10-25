@@ -10,11 +10,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.lock .
 RUN pip install --no-cache-dir -r requirements.lock
 
-COPY backend/ app/
+# Preserve the repo layout. `COPY backend/ app/` copies the *contents* of backend/ into ./app/,
+# which puts the real package at /app/app/app and makes `app.main` unimportable — the image
+# started, then died with "Could not import module app.main". CI only builds this image, so the
+# failure never surfaced there; it was found by actually running the image.
+COPY backend/ backend/
 COPY scripts/ scripts/
+
+# Runtime data, not imports: the plugin marketplace loads registry/registry.json and the firmware
+# endpoints list sketches from hardware/examples. Without registry/ the server logs "No plugin
+# registry configured and none bundled; the marketplace will report that it is unavailable".
+COPY registry/ registry/
+COPY hardware/examples/ hardware/examples/
 
 RUN mkdir -p /app/data
 
 EXPOSE 8080
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app.main:app", "--app-dir", "backend", "--host", "0.0.0.0", "--port", "8080"]

@@ -9,6 +9,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Neither Docker image could start.** Both Dockerfiles used `COPY backend/ app/`, which copies
+  the *contents* of `backend/` into `./app/`, leaving the real package at `/app/app/app`. The
+  backend image died with `Error loading ASGI app. Could not import module "app.main"` and the
+  desktop image with `ModuleNotFoundError: No module named 'app.core'` — before either bound a
+  port. The layout is now preserved (`COPY backend/ backend/`, and `uvicorn --app-dir backend`),
+  and `Dockerfile.desktop` also copies the root-level `uartscope_follow.py` / `uartscope_theme.py`
+  that `desktop_app.py` imports plus `registry/` and `hardware/examples/`, which the plugin
+  marketplace and firmware screens read at runtime.
+- **CI built the images but never ran them,** which is why a completely non-functional image could
+  report `docker: success`. The docker job now starts both images and probes them: `/docs` plus
+  `/api/plugins` (which fails if `registry/` is missing) for the backend, and `/` for the desktop.
+
+  Verified by running both images locally: backend `/docs` 200 with the registry warning gone and
+  `/api/plugins` returning `lin_ldf`, desktop `/` 200 with `<title>UARTScope Pro</title>`.
 - **A fresh clone could install a dependency tree nobody had tested — and the Docker
   images were missing a declared dependency.** The repo carried two hand-maintained
   manifests that disagreed: `backend/pyproject.toml` declared `esptool>=4.7` (the
