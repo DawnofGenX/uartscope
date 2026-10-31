@@ -1,7 +1,7 @@
 {
   "registry_version": 1,
-  "updated": "2026-09-28",
-  "note": "Plugin manifest for UARTScope Pro. `module` is resolved relative to this file. Point UARTSCOPE_PLUGIN_REGISTRY at a URL to use a hosted registry instead of this bundled one.",
+  "updated": "2026-11-01",
+  "note": "Plugin manifest for UARTScope Pro. `module` is resolved relative to this file. Point UARTSCOPE_PLUGIN_REGISTRY at a URL to use a hosted registry instead of this bundled one. Each entry pins the SHA-256 of the module it publishes: an install whose bytes do not match the pin is refused before the file is imported. Modules are also checked against the capability policy in backend/app/core/plugin_policy.py -- pure computation only, no filesystem, network, process or interpreter-internals access.",
   "plugins": [
     {
       "id": "lin_ldf",
@@ -11,7 +11,8 @@
       "description": "LIN bus frames: frame ID, protected PID, 1-8 data bytes, and a checksum check. Signal mapping for five common LDF frames.",
       "tags": ["automotive", "lin", "can-lin"],
       "module": "lin_ldf.py",
-      "class": "LinLdfDecoder"
+      "class": "LinLdfDecoder",
+      "sha256": "9af147d95dd57083139d9ec6c12f737f0d878a3eeb8e5b7962ae7d8d9d858f45"
     },
     {
       "id": "j1939",
@@ -21,7 +22,8 @@
       "description": "SAE J1939 for trucks, buses and agricultural vehicles. PGN-based message parsing with source-address and priority extraction.",
       "tags": ["automotive", "j1939", "truck"],
       "module": "j1939.py",
-      "class": "J1939Decoder"
+      "class": "J1939Decoder",
+      "sha256": "d0a7643f7963c648dc4c250e8218e809ce2cb0593486395628cdaea9953ba7f4"
     },
     {
       "id": "dali",
@@ -31,7 +33,8 @@
       "description": "DALI / DALI-2 lighting control. Forward and backward frames, broadcast, group and scene addressing.",
       "tags": ["lighting", "dali", "iot"],
       "module": "dali.py",
-      "class": "DaliDecoder"
+      "class": "DaliDecoder",
+      "sha256": "cf6df6bc1f4c508c6593e76a8d0d6164ff42c410ec593ee7544d18ad82936fdf"
     }
   ]
 }

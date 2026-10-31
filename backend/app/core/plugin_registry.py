@@ -8,9 +8,18 @@ the risk explicit and keep it contained:
   * A manifest is parsed and validated before anything is fetched. An entry
     without an id, or naming a file that is not a plain filename, is rejected
     rather than skipped, so a broken registry fails loudly.
+  * A module is then run through `plugin_policy.check_source` -- an AST
+    allowlist of imports and builtins -- before it is compiled. A decoder that
+    opens a socket, shells out or reaches for `__class__` is refused with the
+    line number. That is a seatbelt, not a sandbox; plugin_policy explains why
+    an OS-level boundary is not available in this product's shape.
   * A downloaded module is imported, and exactly one class is required to be a
     real `ProtocolDecoder` instance. A module that raises on import, or that
     exposes no conforming class, is refused before it can reach the manager.
+  * When the manifest pins a `sha256`, the bytes are checked against it, and the
+    digest is recorded on the install. `restore_installed` re-checks it at
+    startup, so a plugin file swapped on disk after install is dropped instead
+    of quietly loaded.
   * A plugin may not claim the id of a built-in. `uart_text` is the id every
     text frame is matched against; a plugin squatting on it would silently take
     over decoding for all text devices.
@@ -30,6 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
+from app.core import plugin_policy
 from app.core.protocol_decoder import ProtocolDecoder
 
 logger = logging.getLogger(__name__)
@@ -84,6 +94,9 @@ class InstalledPlugin:
     cls: str = ''
     tags: List[str] = field(default_factory=list)
     source: str = ''
+    # SHA-256 of the module as installed, so a file swapped on disk after the
+    # install can be detected at startup instead of silently loaded.
+    sha256: str = ''
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -187,7 +200,20 @@ class PluginRegistry:
         a plugin is. Everything that can be checked without trusting it is
         checked here, and the caller is expected to have confirmed the source
         with the user first.
+
+        The capability policy runs before `compile`, so a plugin refused for
+        opening a socket is never executed at all -- not even its import-time
+        side effects.
         """
+        violations = plugin_policy.check_source(source, origin=origin)
+        if violations:
+            shown = violations[:5]
+            suffix = ('' if len(violations) == len(shown)
+                      else f' (+{len(violations) - len(shown)} more)')
+            raise PluginValidationError(
+                'plugin refused by capability policy: '
+                + '; '.join(shown) + suffix)
+
         namespace: Dict[str, Any] = {'__name__': 'uartscope_plugin', '__file__': origin}
         try:
             code = compile(source, origin, 'exec')
@@ -273,6 +299,14 @@ class PluginRegistry:
         module_name = entry.get('module') or f"{plugin_id}.py"
         origin_dir = Path(source_root) if source_root else self._install_dir
         candidate = origin_dir / module_name
+        if not candidate.exists():
+            raise PluginValidationError(f"plugin file not found: {candidate}")
+        # Integrity before execution: if the manifest pins a digest, the bytes
+        # are compared before anything is compiled, let alone run.
+        try:
+            digest = plugin_policy.check_digest(candidate, entry.get('sha256'))
+        except ValueError as exc:
+            raise PluginValidationError(str(exc)) from exc
         decoder = self.validate_file(candidate)
         self._check_id(plugin_id, decoder)
 
@@ -291,6 +325,7 @@ class PluginRegistry:
             cls=type(decoder).__name__,
             tags=list(entry.get('tags') or []),
             source=source or str(candidate),
+            sha256=digest,
         )
         self._installed[plugin_id] = record
         self._manager.register(decoder)
@@ -354,6 +389,11 @@ class PluginRegistry:
                                record.plugin_id, path)
                 continue
             try:
+                if record.sha256:
+                    # A file that changed on disk since install is exactly the
+                    # case the digest is recorded for: refuse to load it, and
+                    # say so, instead of decoding live traffic with it.
+                    plugin_policy.check_digest(path, record.sha256)
                 decoder = self.validate_file(path)
                 self._check_id(record.plugin_id, decoder)
             except (PluginValidationError, ValueError) as exc:

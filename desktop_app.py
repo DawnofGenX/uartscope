@@ -3269,8 +3269,11 @@ def marketplace_page():
             ui.label('Before you install').classes('text-[#e4e4e7] text-xs font-medium')
             ui.label(
                 'A plugin is Python that runs inside this process and is called on '
-                'live traffic. It is not sandboxed. Install only decoders whose '
-                'source you have read.'
+                'live traffic. It is not sandboxed. Installs are off by default, a '
+                'capability check refuses plugins that import network, file or '
+                'process modules before they run, and each registry entry pins a '
+                'SHA-256 that is re-checked on every start. That is a seatbelt, not '
+                'a sandbox — install only decoders whose source you have read.'
             ).classes('text-[#71717a] text-xs mt-1 leading-relaxed')
 
         # Search bar

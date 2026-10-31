@@ -7,6 +7,35 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Security
+
+- **The plugin marketplace now enforces capabilities, not just shape.** Validation used to check
+  only that a module exposed one concrete `ProtocolDecoder`; the code inside it could do anything.
+  `backend/app/core/plugin_policy.py` now parses the source and refuses, **before it is compiled**,
+  any plugin whose imports are not on an allowlist of pure-computation modules — `os`, `sys`,
+  `socket`, `subprocess`, `pathlib`, `pickle`, `importlib`, `ctypes`, `threading` and everything
+  else outside the list are refused with a line number — along with `eval`, `exec`, `compile`,
+  `open`, `getattr`, `globals`, `__import__`, relative imports, attribute access to
+  `__class__` / `__globals__` / `__subclasses__`-shaped names, and string literals spelling the
+  same escapes. `app.` is reachable only at `app.core.protocol_decoder`, so the allowlist cannot
+  be walked into `app.core.tool_manager`. Because the check runs before `exec`, a refused plugin
+  never runs its import-time code — `test_plugin_policy.py` proves that with a file marker.
+- **Manifest digests are enforced and durable.** `registry/registry.json` pins a SHA-256 per
+  module; bytes that do not match the pin are never imported. The digest is recorded on the
+  install and re-checked by `restore_installed()`, so a plugin file swapped on disk **after**
+  install is dropped at startup instead of being loaded into the live decode path.
+- **Stated limits, in the module, the README and the FAQ:** this is a seatbelt, not a sandbox.
+  `while True: pass` still hangs the decode path, because a real boundary would be a process hop
+  on the per-frame call — the one place a serial monitor cannot afford it. The docs no longer say
+  only "read the source first"; they say what is enforced and what is not.
+
+### Removed
+
+- **`frontend/` is gone** — 39 tracked files of a v1 React/Vite prototype that no launcher,
+  Dockerfile, CI job or Python module referenced. The README's "parked prototype" note and the
+  `node_modules` ignore entries went with it, so the repo is now Python-only, which is what the
+  README had already claimed. Recoverable from history: it is present in `6654e44`.
+
 ### Fixed
 
 - **Firmware flashing could never work: the argv was unexecutable.** `flash_firmware` built

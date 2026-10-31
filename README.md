@@ -15,12 +15,6 @@ replayable sessions, and decodes raw bus traffic (UART text, Modbus RTU, I2C,
 SPI, CAN, CAN with a DBC file). The desktop app is pure Python (NiceGUI) — no
 Node.js, no build step, no browser install.
 
-> **On `frontend/`:** the repo still contains a React/Vite prototype from v1. Nothing in the
-> shipped product uses it — `desktop_app.py` serves the UI itself, and no Dockerfile, launcher
-> or CI job builds or copies it. It is parked, not supported; the "no Node.js" statement above
-> describes the app you install, and this note exists so the tree does not appear to contradict
-> it. Say the word and it gets deleted.
-
 ![Live charts with five telemetry series grouped by unit](docs/images/04-charts.png)
 
 ## What it does
@@ -33,17 +27,23 @@ Node.js, no build step, no browser install.
 | Sessions | Record, replay, diff against a golden baseline, and export JSON/CSV; share as `.uartscope` bundles from the desktop app or `GET /api/export/session/{id}/bundle` |
 | Protocol decoders | Six built-ins — UART Text, Modbus RTU, I2C, SPI, CAN Bus, CAN DBC — all with encode as well as decode |
 | Firmware flashing | Compile and flash ESP32 sketches from the desktop app |
-| Plugin marketplace | Install real third-party decoders from a registry manifest; `registry/registry.json` ships LIN, J1939 and DALI. Validation, persistence and uninstall are implemented |
+| Plugin marketplace | Install real third-party decoders from a registry manifest; `registry/registry.json` ships LIN, J1939 and DALI. Refused before execution by an AST capability policy, digest-pinned, with persistence and uninstall implemented |
 | MQTT | Multi-broker profiles, pub/sub, message history (backend API is live; the MQTT screen is still on the v1 UI — see below) |
 | REST + WebSocket API | FastAPI backend on :8080 with ~50 verified routes; the OpenAPI schema at `/docs` lists them all |
 
 ### What to know before you trust the screenshots
 
 - Installing a **plugin** runs third-party Python inside the app process and is
-  **not sandboxed**. A plugin that is registered gets its `can_decode` called
-  against live traffic. The marketplace validates and records what it installs,
-  but it cannot make untrusted code safe — read the source first. The screen
-  says this on the page.
+  **not sandboxed** — a registered plugin's `can_decode` is called against live
+  traffic, and no OS boundary can sit in that path without adding an IPC hop to
+  every frame. What the marketplace *does* enforce: installs are off by default;
+  an AST capability policy refuses any plugin that imports a filesystem,
+  network or process module, or reaches for interpreter internals, **before it
+  is compiled**; and `registry/registry.json` pins a SHA-256 per module, which is
+  recorded on install and re-checked at startup, so a file swapped on disk after
+  install is dropped instead of loaded. That is a seatbelt, not a sandbox: a
+  plugin that loops forever still hangs the decode path. Read the source first.
+  The screen says this on the page.
 - The registry ships as a local manifest, not a hosted service. Set
   `UARTSCOPE_PLUGIN_REGISTRY` to an `http(s)` URL to point at a remote one;
   the manifest format is the same either way.

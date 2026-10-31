@@ -8,11 +8,6 @@ venv/
 .venv*/
 .env
 
-# Node
-node_modules/
-dist/
-build/
-
 # IDE
 .vscode/
 .idea/

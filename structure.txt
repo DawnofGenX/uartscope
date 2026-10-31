@@ -49,34 +49,6 @@ uartscope/
 │   ├── requirements-dev.lock
 │   ├── pyproject.toml
 │   └── Dockerfile
-├── frontend/
-│   ├── src/
-│   │   ├── main.tsx
-│   │   ├── App.tsx
-│   │   ├── api/
-│   │   │   ├── client.ts
-│   │   │   └── websocket.ts
-│   │   ├── components/
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── TerminalView.tsx
-│   │   │   ├── LiveChart.tsx
-│   │   │   ├── DevicePanel.tsx
-│   │   │   ├── PacketInspector.tsx
-│   │   │   ├── AlertPanel.tsx
-│   │   │   ├── SessionPlayer.tsx
-│   │   │   └── Settings.tsx
-│   │   ├── hooks/
-│   │   │   ├── useTelemetry.ts
-│   │   │   ├── useDevices.ts
-│   │   │   └── useAlerts.ts
-│   │   ├── types/
-│   │   │   └── index.ts
-│   │   └── styles/
-│   │       └── globals.css
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── vite.config.ts
-│   └── index.html
 ├── docs/
 │   ├── architecture.md
 │   ├── api_reference.md

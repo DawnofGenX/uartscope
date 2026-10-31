@@ -222,17 +222,32 @@ A refused install tells you exactly this, and nothing is written to disk.
 
 ### Is installing a plugin safe?
 
-No, and the app does not pretend otherwise. Installing executes the plugin's
-module with `exec()` in the application process. Validation checks the plugin's
-*shape* — that it exposes a real `ProtocolDecoder` subclass and does not claim
-a built-in protocol id — but a valid plugin can still do whatever its code
-does. The Marketplace screen states this on the page rather than burying it.
+Partly, and the app is precise about which part.
 
-The control is `plugin_install_enabled`, enforced inside
-`PluginRegistry.install()` — the single point every caller goes through,
-including the desktop app. An earlier version gated only the HTTP route, which
-left the shipped Windows executable able to install plugins with the setting
-off; that is fixed, and `test_plugin_install_gate.py` pins it on both paths.
+**Enforced:**
+
+- Installs are **disabled by default** (`UARTSCOPE_PLUGIN_INSTALL_ENABLED`), and
+  the gate lives inside `PluginRegistry.install()` — the one point every caller
+  goes through, including the desktop app.
+- The source is checked against an AST capability allowlist **before it is
+  compiled**, so `import os`, `import socket`, `import subprocess`,
+  `import pickle`, `open()`, `eval()`, `getattr()` and `__class__` /
+  `__globals__` / `__subclasses__`-style escapes are refused with the line
+  number. A refused plugin never runs, not even its import-time code
+  (`backend/app/core/plugin_policy.py`).
+- The manifest pins a SHA-256 per module. Bytes that do not match the pin are
+  never imported; the digest is recorded on install and re-checked at startup,
+  so a plugin file swapped on disk after install is dropped rather than loaded.
+- The plugin's *shape* is validated: exactly one concrete `ProtocolDecoder`
+  subclass, and it may not claim a built-in protocol id.
+
+**Not enforced, deliberately:** this is a seatbelt, not a sandbox.
+`while True: pass` hangs the decode path and no AST walk can see it. A real
+sandbox would have to be a process boundary, and `can_decode` runs on every
+frame — putting IPC in that loop would add latency to the thing the tool exists
+to do. So the standing rule is unchanged: install from publishers you trust, and
+read the source first. The Marketplace screen states this on the page rather
+than burying it.
 
 ### Do I need to restart after installing?
 

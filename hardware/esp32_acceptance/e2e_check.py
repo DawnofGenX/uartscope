@@ -190,8 +190,8 @@ async def main():
         async def ws_client():
             import websockets
             # The router is mounted with prefix="/api", so the path is /api/ws/
-            # telemetry -- not /ws/telemetry. frontend/src/api/websocket.ts
-            # builds the same URL from window.location.host.
+            # telemetry -- not /ws/telemetry. The desktop UI builds the same URL
+            # from window.location.host.
             uri = f"ws://127.0.0.1:{PORT}/api/ws/telemetry"
             try:
                 async with websockets.connect(uri) as ws:
