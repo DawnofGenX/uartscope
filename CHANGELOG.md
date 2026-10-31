@@ -82,8 +82,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   versions.
 
   Verified, not assumed: a clean virtualenv built from the runtime lock passes the
-  full suite (247 tests), and so does the same environment with the dev lock installed
-  on top.
+  full suite (247 tests at that commit; 299 now), and so does the same environment
+  with the dev lock installed on top.
 
 ## [2.2.0] — 2026-10-07
 
