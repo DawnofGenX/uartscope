@@ -5,7 +5,7 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.1] - 2026-11-01
 
 ### Security
 
@@ -535,7 +535,9 @@ about what has been redesigned.
 - No tracebacks in the application log across a full pass of every screen.
 - The React frontend in `frontend/` is unchanged and out of scope for v2.
 
+[2.2.1]: https://github.com/DawnofGenX/uartscope/compare/v2.2.0...v2.2.1
+[2.2.0]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.2.0
 [2.0.1]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.0.1
 [2.0.0]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.0.0
-[Unreleased]: https://github.com/DawnofGenX/uartscope/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/DawnofGenX/uartscope/compare/v2.2.1...HEAD
 [2.1.0]: https://github.com/DawnofGenX/uartscope/compare/v2.0.1...v2.1.0
