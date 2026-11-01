@@ -32,7 +32,13 @@ REPO = Path(__file__).resolve().parents[2]
 BACKEND = REPO / "backend"
 sys.path.insert(0, str(BACKEND))
 
-PY = "/home/hermes/gh-polish/uartscope/.venv-v2/bin/python"
+# The interpreter used to boot the backend under test. It was hardcoded to a
+# virtualenv inside a *different* checkout (…/gh-polish/uartscope/.venv-v2), so
+# the script could only ever run on the machine that wrote it. Default to the
+# interpreter running this file; override with UARTSCOPE_PYTHON if you keep a
+# dedicated venv.
+PY = os.environ.get("UARTSCOPE_PYTHON") or sys.executable
+
 PORT = 8099
 BASE = f"http://127.0.0.1:{PORT}"
 
