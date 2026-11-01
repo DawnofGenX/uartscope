@@ -123,6 +123,11 @@ def main() -> None:
     path = base_path()
 
     if is_frozen():
+        # PyInstaller's documented hook for anything that touches
+        # multiprocessing (uvicorn/nicegui import it): without this a frozen
+        # Windows child process re-runs the entry point.
+        import multiprocessing
+        multiprocessing.freeze_support()
         # The bundled package sits at the root of _MEIPASS; data files
         # (registry/, hardware/examples/) are resolved relative to cwd by some
         # screens, so the working directory moves with it.
