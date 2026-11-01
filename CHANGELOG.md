@@ -5,7 +5,7 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.2] - 2026-11-01
 
 ### Fixed
 
@@ -34,6 +34,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   - `test_packaged_entry.py` pins the bootstrap on Linux: frozen means no subprocess at all, the
     API thread answers a real `/api/health`, and the spec and the CI step are checked against each
     other so the build cannot drift back to a `.py`.
+- **A taken API port no longer half-kills the packaged app.** :8080 is also llama.cpp's default, so
+  a machine running `llama-server --port 8080` had uvicorn raise *after* the app's lifespan ran —
+  which shut down the shared singletons ("MQTT manager shut down") while the UI kept serving. The
+  port is now checked before anything starts: the API is skipped with a warning, the desktop UI is
+  unaffected, and `UARTSCOPE_API_PORT` moves it. Found by running the packaged build on this
+  machine, not by reading the code.
 - **The v2.2.1 Windows asset was removed from its release page.** It is the binary described above;
   leaving it downloadable would have been shipping a fork bomb.
 
@@ -567,9 +573,10 @@ about what has been redesigned.
 - No tracebacks in the application log across a full pass of every screen.
 - The React frontend in `frontend/` is unchanged and out of scope for v2.
 
+[2.2.2]: https://github.com/DawnofGenX/uartscope/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/DawnofGenX/uartscope/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.2.0
 [2.0.1]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.0.1
 [2.0.0]: https://github.com/DawnofGenX/uartscope/releases/tag/v2.0.0
-[Unreleased]: https://github.com/DawnofGenX/uartscope/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/DawnofGenX/uartscope/compare/v2.2.2...HEAD
 [2.1.0]: https://github.com/DawnofGenX/uartscope/compare/v2.0.1...v2.1.0

@@ -98,6 +98,7 @@ def test_api_thread_really_serves_health():
     """The threaded server is not assumed to work: it answers a real request."""
     port = _free_port()
     server = run_desktop.start_api_thread(host='127.0.0.1', port=port)
+    assert server is not None
     url = f'http://127.0.0.1:{port}/api/health'
     body = None
     try:
@@ -113,6 +114,36 @@ def test_api_thread_really_serves_health():
         assert '"status":"healthy"' in body.replace(' ', '')
     finally:
         server.should_exit = True
+
+
+def test_a_busy_api_port_does_not_kill_the_app(caplog):
+    """8080 is llama.cpp's default too; the UI must still start.
+
+    This is not hypothetical: on a machine running `llama-server --port 8080`,
+    uvicorn raised after running the app lifespan, which shut down the shared
+    singletons ("MQTT manager shut down") while the UI kept serving. The port is
+    checked first now, and the fallback is logged.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
+        taken.bind(('127.0.0.1', 0))
+        taken.listen(1)
+        busy_port = taken.getsockname()[1]
+        assert run_desktop.port_is_free('127.0.0.1', busy_port) is False
+        with caplog.at_level('WARNING', logger='run_desktop'):
+            server = run_desktop.start_api_thread(host='127.0.0.1', port=busy_port)
+    assert server is None, 'uvicorn was started on a port someone else owns'
+    assert any('already in use' in record.message for record in caplog.records), \
+        [r.message for r in caplog.records]
+
+
+def test_api_port_env_override(monkeypatch):
+    """UARTSCOPE_API_PORT moves the API off a taken port."""
+    monkeypatch.setenv('UARTSCOPE_API_PORT', '18080')
+    assert run_desktop.api_port() == 18080
+    monkeypatch.setenv('UARTSCOPE_API_PORT', 'not-a-port')
+    assert run_desktop.api_port() == run_desktop.DEFAULT_API_PORT
+    monkeypatch.delenv('UARTSCOPE_API_PORT')
+    assert run_desktop.api_port() == run_desktop.DEFAULT_API_PORT
 
 
 def test_the_spec_ci_builds_names_the_packaged_entry_point():
