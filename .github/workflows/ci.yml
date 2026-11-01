@@ -206,23 +206,47 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          cd backend; pip install -r requirements.lock
-          # nicegui used to be pinned here because the manifests omitted it; it
-          # is a declared dependency now. pyinstaller is build-only (not a runtime
-          # dep, so it is not in the lock) and stays a separate install — but pinned,
-          # because the .exe it produces is a release artifact and its version
-          # affects the build output.
+          Push-Location backend
+          # On one line with `;` this step looked green while installing nothing:
+          # PowerShell continues after a failure, and the step's exit code came
+          # from the LAST command. requirements.lock then carried `uvloop`, which
+          # refuses to build on Windows, so pip aborted and the "successful"
+          # build produced a 9.8 MB exe with no uvicorn, no fastapi, no nicegui
+          # and no app. The lock is a universal resolution now (uvloop is marked
+          # non-win32); these checks make a future install failure loud.
+          pip install -r requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw "requirements.lock failed to install on Windows" }
+          Pop-Location
+          # pyinstaller is build-only (not a runtime dep, so it is not in the
+          # lock) and stays a separate install — but pinned, because the .exe it
+          # produces is a release artifact and its version affects the output.
           pip install pyinstaller==6.22.3
+          if ($LASTEXITCODE -ne 0) { throw "pyinstaller install failed" }
 
       - name: Build Windows executable
+        shell: pwsh
         run: |
           # The spec, not the .py: `pyinstaller launch.py` ignores uartscope.spec
           # and produced a bundle with no desktop_app.py, no backend and no
           # registry, whose entry point then re-ran itself. The spec is the
           # build definition; keep CI and humans on the same one.
-          pyinstaller --clean uartscope.spec
+          pyinstaller --clean uartscope.spec 2>&1 | Tee-Object -FilePath build-exe.log
+          if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed" }
+
+          # PyInstaller reports a hidden import it could not find as an ERROR
+          # line and still exits 0. Every entry in the spec's hiddenimports list
+          # is deliberate — the frozen entry point imports uvicorn inside a
+          # function, so static analysis cannot see it — and a bundle missing one
+          # dies on the first click, which is exactly how v2.2.1 shipped.
+          if (Select-String -Path build-exe.log -Pattern "Hidden import '.*' not found") {
+            Write-Host '::group::missing hidden imports'
+            Select-String -Path build-exe.log -Pattern "Hidden import '.*' not found" | ForEach-Object { Write-Host $_.Line }
+            Write-Host '::endgroup::'
+            throw 'the bundle is missing hidden imports the spec asked for'
+          }
         env:
           PYTHONIOENCODING: utf-8
 

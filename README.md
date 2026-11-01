@@ -86,9 +86,16 @@ Regenerate after changing dependencies in `backend/pyproject.toml`:
 
 ```bash
 cd backend
-uv pip compile pyproject.toml -o requirements.lock
-uv pip compile pyproject.toml --extra dev -o requirements-dev.lock
+uv pip compile pyproject.toml --universal -o requirements.lock
+uv pip compile pyproject.toml --extra dev --universal -o requirements-dev.lock
 ```
+
+`--universal` matters: without it the lock is a *Linux* resolution, and it carried
+`uvloop`, which refuses to build on Windows. `pip install -r requirements.lock` therefore failed
+outright on Windows — and because that step ran on one line with `;`, it looked green while
+installing nothing, so the Windows build produced a binary with no dependencies in it. A universal
+lock emits environment markers (`uvloop ... ; sys_platform != 'win32'`, `colorama ... ;
+sys_platform == 'win32'`) and installs on Linux, macOS and Windows from the same file.
 
 No board handy? Simulate one in a second terminal:
 

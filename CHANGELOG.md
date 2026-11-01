@@ -40,6 +40,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   port is now checked before anything starts: the API is skipped with a warning, the desktop UI is
   unaffected, and `UARTSCOPE_API_PORT` moves it. Found by running the packaged build on this
   machine, not by reading the code.
+- **The dependency lock could not be installed on Windows at all.** `requirements.lock` was
+  compiled as a *Linux* resolution and pinned `uvloop`, which refuses to build on Windows
+  (`RuntimeError: uvloop does not support Windows at the moment`), so `pip install -r
+  requirements.lock` on `windows-latest` aborted before installing anything — and the build step
+  ran on one line with `;`, so the step's exit code came from the *next* command and stayed green.
+  The Windows build therefore ran `pyinstaller` with no dependencies installed, which is why the
+  .exe missing `uvicorn` in the traceback above was 9.8 MB instead of ~40 MB. Both locks are now
+  universal resolutions (`--universal`), emitting `uvloop ... ; sys_platform != 'win32'` and
+  `colorama ... ; sys_platform == 'win32'`, and the install step fails loudly.
+- **CI now also fails when the bundle is missing a hidden import.** PyInstaller prints
+  `ERROR: Hidden import 'x' not found` and still exits 0, so a bundle that cannot start built
+  successfully. The build step captures the log and refuses to continue if any hidden import the
+  spec asked for is absent.
+- **`workflow_dispatch` runs the Windows build too,** so the artifact gate can be exercised without
+  cutting a release. A gate that only fires once per release is a gate nobody iterates on.
 - **The v2.2.1 Windows asset was removed from its release page.** It is the binary described above;
   leaving it downloadable would have been shipping a fork bomb.
 
