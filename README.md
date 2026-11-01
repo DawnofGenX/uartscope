@@ -136,6 +136,10 @@ uartscope.exe
 It is one process serving both surfaces: the desktop UI on
 http://localhost:3000 and the REST/WebSocket API on http://localhost:8080.
 
+If :8080 is already taken — it is llama.cpp's default, among others — the app says so in its
+console and starts the UI anyway; the UI does not need the API. Point the API somewhere else with
+`UARTSCOPE_API_PORT=18080`.
+
 To build it yourself:
 
 ```bash
