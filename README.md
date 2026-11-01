@@ -117,6 +117,31 @@ curl http://127.0.0.1:8080/api/health
 {"status":"healthy","version":"2.2.1","devices":{"total":0,"connected":0,"streaming":0,"errors":0,"total_bytes_received":0,"total_packets":0},"active_sessions":0,"websocket_clients":0}
 ```
 
+### Windows executable
+
+Each release attaches `uartscope.exe` (built on `windows-latest` from
+`uartscope.spec`). Run it — no Python, no Node, no install:
+
+```
+uartscope.exe
+```
+
+It is one process serving both surfaces: the desktop UI on
+http://localhost:3000 and the REST/WebSocket API on http://localhost:8080.
+
+To build it yourself:
+
+```bash
+pip install -r backend/requirements.lock pyinstaller==6.22.3
+pyinstaller --clean uartscope.spec
+```
+
+Build from the spec, not from a `.py` file: `pyinstaller launch.py` ignores the
+spec and produces a bundle with no UI, no backend and no registry. That is not
+hypothetical — it is what every release up to and including v2.2.1 shipped, and
+the binary re-launched itself instead of serving. CI now starts the built .exe
+and requires both ports to answer before the asset is attached to a release.
+
 ### Docker
 
 ```bash

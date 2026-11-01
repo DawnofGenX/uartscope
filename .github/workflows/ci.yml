@@ -214,9 +214,49 @@ jobs:
 
       - name: Build Windows executable
         run: |
-          pyinstaller --onefile --name uartscope --clean launch.py
+          # The spec, not the .py: `pyinstaller launch.py` ignores uartscope.spec
+          # and produced a bundle with no desktop_app.py, no backend and no
+          # registry, whose entry point then re-ran itself. The spec is the
+          # build definition; keep CI and humans on the same one.
+          pyinstaller --clean uartscope.spec
         env:
           PYTHONIOENCODING: utf-8
+
+      # A build that is never executed is not verified. Both Docker images were
+      # once "built" on every push and could not start; the Windows binary was
+      # worse — it recursively re-launched itself and served nothing, and no
+      # step noticed because no step ever ran it. This starts the artifact,
+      # requires the UI on :3000 *and* the API on :8080 to answer, and fails if
+      # the launcher forks.
+      - name: The .exe actually serves (and does not fork-bomb)
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'dist\uartscope.exe'
+          if (-not (Test-Path $exe)) { throw "no executable at $exe" }
+          try {
+            Start-Process -FilePath $exe -PassThru | Out-Null
+            $ui = $null
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 2
+              $procs = @(Get-Process uartscope -ErrorAction SilentlyContinue)
+              if ($procs.Count -gt 3) {
+                throw "launcher forked: $($procs.Count) uartscope.exe processes (expected 1-2)"
+              }
+              try {
+                $ui = Invoke-WebRequest 'http://127.0.0.1:3000/' -UseBasicParsing -TimeoutSec 5
+                break
+              } catch { }
+            }
+            if (-not $ui) { throw 'the UI never answered on http://127.0.0.1:3000/' }
+            if ($ui.StatusCode -ne 200) { throw "UI returned HTTP $($ui.StatusCode)" }
+            if ($ui.Content -notmatch 'UARTScope Pro') { throw 'port 3000 answered, but not with UARTScope' }
+            $api = Invoke-WebRequest 'http://127.0.0.1:8080/api/health' -UseBasicParsing -TimeoutSec 10
+            if ($api.StatusCode -ne 200) { throw "API returned HTTP $($api.StatusCode)" }
+            Write-Host "UI 200; API 200 -> $($api.Content)"
+            Write-Host "processes after startup: $(@(Get-Process uartscope -ErrorAction SilentlyContinue).Count)"
+          } finally {
+            Get-Process uartscope -ErrorAction SilentlyContinue | Stop-Process -Force
+          }
 
       - name: Upload .exe artifact
         uses: actions/upload-artifact@v7.0.2

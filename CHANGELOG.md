@@ -5,6 +5,38 @@ All notable changes to UARTScope Pro are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The Windows `.exe` had never worked: it re-launched itself instead of serving.** The release
+  workflow ran `pyinstaller --onefile --name uartscope --clean launch.py`, which ignores
+  `uartscope.spec`, so the bundle contained `launch.py` and nothing else — no `desktop_app.py`, no
+  `backend/`, no `registry/`. Worse, `launch.py` starts the API with
+  `Popen([sys.executable, "-m", "uvicorn", ...])`, and in a frozen build `sys.executable` *is the
+  executable*, so the child ran the launcher again: running the v2.2.1 binary produced **3,194
+  `uartscope.exe` processes** and never bound a port. Every release that attached a binary shipped
+  this; nothing caught it because no step had ever executed the artifact.
+
+  Fixed in three places, because the defect lived in three:
+  - `run_desktop.py` is the packaged entry point and serves both surfaces from **one process**: the
+    real `app.main:app` on :8080 in a daemon thread (uvicorn skips signal handlers off the main
+    thread), and the NiceGUI UI on :3000 by executing `desktop_app.py` as `__main__`.
+  - `launch.py` hands a frozen build to `run_desktop.py` rather than spawning, so even a hand-built
+    `pyinstaller launch.py` cannot fork.
+  - `uartscope.spec` is now the build definition CI uses (`pyinstaller --clean uartscope.spec`):
+    `backend/` is on `pathex` so `app` is analyzed and frozen as code, `collect_submodules('app')`
+    covers every route module, NiceGUI's assets are collected, and `desktop_app.py`,
+    `uartscope_theme.py`, `uartscope_follow.py`, `registry/` and `hardware/examples/` ship as data.
+  - **CI now starts the built `.exe`** and requires `http://127.0.0.1:3000/` and
+    `http://127.0.0.1:8080/api/health` to answer, failing if more than three `uartscope.exe`
+    processes exist. A binary that does not run cannot be attached to a release.
+  - `test_packaged_entry.py` pins the bootstrap on Linux: frozen means no subprocess at all, the
+    API thread answers a real `/api/health`, and the spec and the CI step are checked against each
+    other so the build cannot drift back to a `.py`.
+- **The v2.2.1 Windows asset was removed from its release page.** It is the binary described above;
+  leaving it downloadable would have been shipping a fork bomb.
+
 ## [2.2.1] - 2026-11-01
 
 ### Security

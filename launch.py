@@ -1,4 +1,14 @@
-"""UARTScope Pro Launcher - starts backend + desktop app"""
+"""UARTScope Pro Launcher - starts backend + desktop app (from source only).
+
+This module spawns two processes, which only works when `sys.executable` is a
+Python interpreter. In a PyInstaller build it is the packaged executable itself,
+so `Popen([sys.executable, "-m", "uvicorn", ...])` re-runs the launcher and
+recurses: one click, thousands of processes, no server. That is why the first
+thing `main()` does is hand a frozen build to run_desktop.py, which serves both
+ports in one process. The release workflow builds `uartscope.spec`, whose entry
+point is run_desktop.py, but a hand-built `pyinstaller launch.py` must not be a
+fork bomb either.
+"""
 import subprocess
 import sys
 import os
@@ -11,6 +21,11 @@ def get_base_path():
     return os.path.dirname(os.path.abspath(__file__))
 
 def main():
+    if getattr(sys, 'frozen', False):
+        # See the module docstring: spawning is impossible in a frozen build.
+        from run_desktop import main as packaged_main
+        return packaged_main()
+
     base_path = get_base_path()
     backend_path = os.path.join(base_path, "backend")
     
