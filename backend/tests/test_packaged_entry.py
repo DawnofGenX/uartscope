@@ -27,6 +27,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+import importlib.util
+import re
 
 import pytest
 
@@ -174,3 +176,19 @@ def test_ci_runs_the_exe_it_builds():
     assert 'The .exe actually serves' in workflow
     assert '127.0.0.1:3000' in workflow and '127.0.0.1:8080/api/health' in workflow
     assert 'launcher forked' in workflow, 'the fork guard was removed'
+
+
+def test_every_hidden_import_in_the_spec_resolves():
+    """A stale name here is a Windows-only build failure.
+
+    `nicegui.settings` was renamed in NiceGUI 3.x, and PyInstaller reports a
+    hidden import it cannot find as an `ERROR:` line while still exiting 0 — so
+    the only place the mistake surfaced was a full windows-latest build. Checking
+    the names against the installed packages turns that into a one-second test.
+    """
+    spec = (ROOT / 'uartscope.spec').read_text(encoding='utf-8')
+    block = spec.split('hiddenimports = collect_submodules', 1)[1].split(']', 1)[0]
+    names = set(re.findall(r"'([A-Za-z0-9_.]+)'", block)) - {'app'}
+    assert len(names) > 20, f'expected the spec\'s explicit hidden imports, parsed {len(names)}'
+    missing = sorted(name for name in names if importlib.util.find_spec(name) is None)
+    assert missing == [], f'the spec asks for modules that do not exist: {missing}'

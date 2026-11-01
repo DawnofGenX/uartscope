@@ -50,7 +50,7 @@ hiddenimports = collect_submodules('app') + [
     'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',
     'uvicorn.lifespan', 'uvicorn.lifespan.on',
     'nicegui', 'nicegui.ui', 'nicegui.page', 'nicegui.context', 'nicegui.events',
-    'nicegui.settings',
+    'nicegui.defaults',
     'starlette', 'starlette.applications', 'starlette.middleware',
     'starlette.requests', 'starlette.responses', 'starlette.routing',
     'starlette.staticfiles', 'starlette.websockets',
